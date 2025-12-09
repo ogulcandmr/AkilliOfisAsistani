@@ -35,6 +35,22 @@ namespace OfisAsistan.Forms
             LoadData();
         }
 
+        private void ListBox_DoubleClick(object sender, EventArgs e)
+        {
+            var listBox = sender as ListBox;
+            if (listBox == null)
+                return;
+
+            var taskItem = listBox.SelectedItem as TaskItem;
+            if (taskItem == null || taskItem.Task == null)
+                return;
+
+            var taskId = taskItem.Task.Id;
+            var detailForm = new TaskDetailForm(_databaseService, taskId);
+            detailForm.ShowDialog();
+            LoadData();
+        }
+
         private void InitializeComponent()
         {
             this.Text = "Çalışan Paneli";
@@ -52,8 +68,8 @@ namespace OfisAsistan.Forms
             mainPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
 
             // Kanban paneli
-            var kanbanPanel = new Panel { Dock = DockStyle.Fill };
-            var kanbanLabel = new Label { Text = "Kanban Panosu", Font = new Font("Arial", 12, FontStyle.Bold), Dock = DockStyle.Top, Height = 30 };
+            var kanbanPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(5) };
+            var kanbanLabel = new Label { Text = "Kanban Panosu", Font = new Font("Arial", 12, FontStyle.Bold), Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft };
 
             var kanbanTable = new TableLayoutPanel
             {
@@ -94,16 +110,16 @@ namespace OfisAsistan.Forms
             kanbanPanel.Controls.Add(kanbanLabel);
 
             // Brifing paneli
-            var briefingPanel = new Panel { Dock = DockStyle.Fill };
-            var briefingLabel = new Label { Text = "Günlük Brifing", Font = new Font("Arial", 12, FontStyle.Bold), Dock = DockStyle.Top, Height = 30 };
-            txtBriefing = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
+            var briefingPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(5) };
+            var briefingLabel = new Label { Text = "Günlük Brifing", Font = new Font("Arial", 12, FontStyle.Bold), Dock = DockStyle.Top, Height = 30, TextAlign = ContentAlignment.MiddleLeft };
+            txtBriefing = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.WhiteSmoke };
             briefingPanel.Controls.Add(txtBriefing);
             briefingPanel.Controls.Add(briefingLabel);
 
             // Butonlar
-            var buttonsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 50 };
-            btnRefresh = new Button { Text = "Yenile", Size = new Size(100, 40) };
-            btnBreakDown = new Button { Text = "AI Alt Görev", Size = new Size(120, 40) };
+            var buttonsPanel = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 50, Padding = new Padding(10), BackColor = Color.Gainsboro, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+            btnRefresh = new Button { Text = "Yenile", Size = new Size(110, 40), Margin = new Padding(0, 0, 10, 0) };
+            btnBreakDown = new Button { Text = "AI Alt Görev", Size = new Size(130, 40) };
             buttonsPanel.Controls.Add(btnRefresh);
             buttonsPanel.Controls.Add(btnBreakDown);
 
@@ -145,6 +161,11 @@ namespace OfisAsistan.Forms
             lstPending.DragDrop += ListBox_DragDrop;
             lstInProgress.DragDrop += ListBox_DragDrop;
             lstCompleted.DragDrop += ListBox_DragDrop;
+
+            // Çift tık ile görev detayına git
+            lstPending.DoubleClick += ListBox_DoubleClick;
+            lstInProgress.DoubleClick += ListBox_DoubleClick;
+            lstCompleted.DoubleClick += ListBox_DoubleClick;
         }
 
         private async void LoadData()
@@ -175,7 +196,7 @@ namespace OfisAsistan.Forms
                 }
 
                 // Brifing yükle
-                await LoadBriefing();
+                await LoadBriefing(tasks);
             }
             catch (Exception ex)
             {
@@ -183,12 +204,20 @@ namespace OfisAsistan.Forms
             }
         }
 
-        private async System.Threading.Tasks.Task LoadBriefing()
+        private async System.Threading.Tasks.Task LoadBriefing(System.Collections.Generic.List<TaskModel> tasks)
         {
             try
             {
                 var briefing = await _aiService.GenerateDailyBriefingAsync(_employeeId);
-                txtBriefing.Text = briefing;
+
+                if (tasks == null || tasks.Count == 0)
+                {
+                    txtBriefing.Text = "Not: Bugün için kanban panosunda görev görünmüyorsa, henüz size atanmış bir iş olmayabilir.\r\n\r\n" + briefing;
+                }
+                else
+                {
+                    txtBriefing.Text = briefing;
+                }
             }
             catch (Exception ex)
             {
@@ -231,12 +260,42 @@ namespace OfisAsistan.Forms
             try
             {
                 var subTasks = await _aiService.BreakDownTaskAsync(input);
+                if (subTasks == null || subTasks.Count == 0)
+                {
+                    MessageBox.Show("AI bu görev için alt görev üretemedi. Lütfen daha detaylı bir açıklama ile tekrar deneyin.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
                 var message = "Oluşturulan alt görevler:\n\n";
                 foreach (var subTask in subTasks)
                 {
                     message += $"{subTask.Order}. {subTask.Title} ({subTask.EstimatedHours} saat)\n";
                 }
                 MessageBox.Show(message, "Alt Görevler", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                var createResult = MessageBox.Show("Bu alt görevleri size atanmış gerçek görevlere dönüştürmek ister misiniz?", "Alt Görevleri Oluştur", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (createResult == DialogResult.Yes)
+                {
+                    foreach (var subTask in subTasks)
+                    {
+                        var newTask = new TaskModel
+                        {
+                            Title = subTask.Title,
+                            Description = subTask.Description,
+                            EstimatedHours = subTask.EstimatedHours,
+                            AssignedToId = _employeeId,
+                            DepartmentId = 1,
+                            Priority = TaskPriority.Normal,
+                            CreatedDate = DateTime.Now,
+                            Status = TaskStatusModel.Pending
+                        };
+
+                        await _databaseService.CreateTaskAsync(newTask);
+                    }
+
+                    MessageBox.Show("Alt görevler başarıyla oluşturuldu ve size atandı.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    LoadData();
+                }
             }
             catch (Exception ex)
             {
@@ -246,8 +305,12 @@ namespace OfisAsistan.Forms
 
         private void ListBox_MouseDown(object sender, MouseEventArgs e)
         {
+            // Sadece sol tuşla tek tıklamada sürüklemeyi başlat
+            if (e.Button != MouseButtons.Left || e.Clicks > 1)
+                return;
+
             var listBox = sender as ListBox;
-            if (listBox.SelectedItem != null)
+            if (listBox != null && listBox.SelectedItem != null)
             {
                 listBox.DoDragDrop(listBox.SelectedItem, DragDropEffects.Move);
             }

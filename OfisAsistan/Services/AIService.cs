@@ -239,13 +239,29 @@ JSON array formatında döndür, sadece JSON, başka açıklama yapma.";
                 var meetings = await _databaseService.GetMeetingsAsync(employeeId, DateTime.Today);
                 var employee = await _databaseService.GetEmployeeAsync(employeeId);
 
+                var activeTasks = tasks.Where(t => t.Status != TaskStatusModel.Completed).ToList();
+
+                // Hiç görev ve toplantı yoksa sabit brifing dön
+                if (!activeTasks.Any() && !meetings.Any())
+                {
+                    return $"Merhaba {employee?.FullName ?? ""}. Bugün için atanmış bir göreviniz veya toplantınız bulunmuyor. Günü planlamak, eğitim almak veya ekip arkadaşlarınıza destek olmak için güzel bir fırsat.";
+                }
+
+                var tasksText = activeTasks.Any()
+                    ? string.Join("\n", activeTasks.Select(t => $"- {t.Title} (Öncelik: {t.Priority}, Teslim: {t.DueDate:dd.MM.yyyy})"))
+                    : "- Bugün için atanmış göreviniz yok.";
+
+                var meetingsText = meetings.Any()
+                    ? string.Join("\n", meetings.Select(m => $"- {m.Title} ({m.StartTime:HH:mm})"))
+                    : "- Bugün için toplantınız yok.";
+
                 var prompt = $@"{employee?.FullName} için günlük brifing oluştur:
 
 Bugünkü Görevler:
-{string.Join("\n", tasks.Where(t => t.Status != TaskStatusModel.Completed).Select(t => $"- {t.Title} (Öncelik: {t.Priority}, Teslim: {t.DueDate:dd.MM.yyyy})"))}
+{tasksText}
 
 Bugünkü Toplantılar:
-{string.Join("\n", meetings.Select(m => $"- {m.Title} ({m.StartTime:HH:mm})"))}
+{meetingsText}
 
 Kısa, samimi ve motive edici bir brifing yaz. Türkçe.";
 

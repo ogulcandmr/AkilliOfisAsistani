@@ -19,6 +19,11 @@ namespace OfisAsistan.Forms
         private DataGridView dgvEmployees;
         private Label lblWorkload;
         private Label lblAnomalies;
+        private Label lblTotalTasks;
+        private Label lblPendingTasks;
+        private Label lblInProgressTasks;
+        private Label lblCompletedTasks;
+        private Label lblOverdueTasks;
         private Button btnRefresh;
         private Button btnCreateTask;
         private Button btnAIRecommend;
@@ -76,9 +81,35 @@ namespace OfisAsistan.Forms
             anomaliesPanel.Controls.Add(lstAnomalies);
             anomaliesPanel.Controls.Add(anomaliesLabel);
 
-            // Grafikler paneli (DevExpress Chart için placeholder)
+            // Grafikler paneli (İstatistik kartları için placeholder)
             pnlCharts = new Panel { Dock = DockStyle.Fill, BackColor = Color.LightGray };
-            var chartsLabel = new Label { Text = "İstatistikler ve Grafikler (DevExpress Chart)", Font = new Font("Arial", 12, FontStyle.Bold), Dock = DockStyle.Top, Height = 30 };
+            var chartsLabel = new Label { Text = "Genel Görev İstatistikleri", Font = new Font("Arial", 12, FontStyle.Bold), Dock = DockStyle.Top, Height = 30 };
+
+            var statsLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 5
+            };
+            statsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
+            statsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
+            statsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
+            statsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
+            statsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
+
+            lblTotalTasks = new Label { Dock = DockStyle.Fill, Font = new Font("Arial", 10, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft };
+            lblPendingTasks = new Label { Dock = DockStyle.Fill, Font = new Font("Arial", 10), TextAlign = ContentAlignment.MiddleLeft };
+            lblInProgressTasks = new Label { Dock = DockStyle.Fill, Font = new Font("Arial", 10), TextAlign = ContentAlignment.MiddleLeft };
+            lblCompletedTasks = new Label { Dock = DockStyle.Fill, Font = new Font("Arial", 10), TextAlign = ContentAlignment.MiddleLeft };
+            lblOverdueTasks = new Label { Dock = DockStyle.Fill, Font = new Font("Arial", 10), TextAlign = ContentAlignment.MiddleLeft };
+
+            statsLayout.Controls.Add(lblTotalTasks, 0, 0);
+            statsLayout.Controls.Add(lblPendingTasks, 0, 1);
+            statsLayout.Controls.Add(lblInProgressTasks, 0, 2);
+            statsLayout.Controls.Add(lblCompletedTasks, 0, 3);
+            statsLayout.Controls.Add(lblOverdueTasks, 0, 4);
+
+            pnlCharts.Controls.Add(statsLayout);
             pnlCharts.Controls.Add(chartsLabel);
 
             // Butonlar paneli
@@ -124,6 +155,10 @@ namespace OfisAsistan.Forms
         {
             try
             {
+                // Çalışanları yükle (görev tablosunda isim göstermek için önce al)
+                var employees = await _databaseService.GetEmployeesAsync();
+                var employeeLookup = employees.ToDictionary(e => e.Id, e => e.FullName);
+
                 // Görevleri yükle
                 var tasks = await _databaseService.GetTasksAsync();
                 dgvTasks.DataSource = tasks.Select(t => new
@@ -133,11 +168,10 @@ namespace OfisAsistan.Forms
                     Durum = t.Status.ToString(),
                     Öncelik = t.Priority.ToString(),
                     Teslim = t.DueDate?.ToString("dd.MM.yyyy") ?? "-",
-                    Atanan = t.AssignedToId
+                    Atanan = (t.AssignedToId > 0 && employeeLookup.ContainsKey(t.AssignedToId)) ? employeeLookup[t.AssignedToId] : "-"
                 }).ToList();
 
-                // Çalışanları yükle
-                var employees = await _databaseService.GetEmployeesAsync();
+                // Çalışanları grid’e bağla
                 dgvEmployees.DataSource = employees.Select(e => new
                 {
                     e.Id,
@@ -152,6 +186,17 @@ namespace OfisAsistan.Forms
 
                 // Anomalileri yükle
                 await LoadAnomalies();
+
+                // Genel istatistikleri yükle
+                var stats = await _databaseService.GetTaskStatisticsAsync();
+                if (stats != null)
+                {
+                    lblTotalTasks.Text = $"Toplam Görev: {stats["Total"]}";
+                    lblPendingTasks.Text = $"Bekleyen: {stats["Pending"]}";
+                    lblInProgressTasks.Text = $"Devam Eden: {stats["InProgress"]}";
+                    lblCompletedTasks.Text = $"Tamamlanan: {stats["Completed"]}";
+                    lblOverdueTasks.Text = $"Gecikmiş: {stats["Overdue"]}";
+                }
             }
             catch (Exception ex)
             {
@@ -167,7 +212,11 @@ namespace OfisAsistan.Forms
                 lstAnomalies.Items.Clear();
                 foreach (var anomaly in anomalies)
                 {
-                    lstAnomalies.Items.Add($"[{anomaly.Severity}] {anomaly.Message}");
+                    var taskPrefix = anomaly.Task != null && !string.IsNullOrWhiteSpace(anomaly.Task.Title)
+                        ? $"Görev: {anomaly.Task.Title} - "
+                        : string.Empty;
+
+                    lstAnomalies.Items.Add($"[{anomaly.Severity}] {taskPrefix}{anomaly.Message}");
                 }
             }
             catch (Exception ex)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -104,7 +105,22 @@ namespace OfisAsistan.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"GetEmployeesAsync Error: {ex.Message}");
-                return new List<Employee>();
+                throw new Exception($"GetEmployeesAsync failed: {ex.Message}", ex);
+            }
+        }
+
+        public async System.Threading.Tasks.Task<List<Employee>> GetEmployeesForEmployeeRoleAsync()
+        {
+            try
+            {
+                // Şimdilik tüm çalışanları döndür
+                var employees = await GetEmployeesAsync();
+                return employees;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"GetEmployeesForEmployeeRoleAsync Error: {ex.Message}");
+                throw;
             }
         }
 

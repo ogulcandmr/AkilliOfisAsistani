@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using DevExpress.Skins;
+using DevExpress.UserSkins;
+using DevExpress.LookAndFeel;
 
 namespace OfisAsistan
 {
@@ -16,6 +19,7 @@ namespace OfisAsistan
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            UserLookAndFeel.Default.SetSkinStyle("Office 2019 Colorful");
             Application.Run(new Form1());
         }
     }

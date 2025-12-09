@@ -266,7 +266,7 @@ Kısa, samimi ve motive edici bir brifing yaz. Türkçe.";
                 // OpenAI format
                 var requestBody = new
                 {
-                    model = "gpt-3.5-turbo",
+                    model = "llama-3.1-8b-instant",
                     messages = new[]
                     {
                         new { role = "system", content = "Sen bir ofis otomasyon asistanısın. Türkçe yanıt ver." },
@@ -281,16 +281,25 @@ Kısa, samimi ve motive edici bir brifing yaz. Türkçe.";
                 _httpClient.DefaultRequestHeaders.Clear();
                 _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
-                var response = await _httpClient.PostAsync($"{_apiUrl}/v1/chat/completions", content);
-                response.EnsureSuccessStatusCode();
+                var url = $"{_apiUrl}/v1/chat/completions";
+                System.Diagnostics.Debug.WriteLine($"CallAIAsync Request -> Url: {url}");
+
+                var response = await _httpClient.PostAsync(url, content);
                 var responseJson = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    System.Diagnostics.Debug.WriteLine($"CallAIAsync Error Response ({(int)response.StatusCode}): {responseJson}");
+                    return $"AI servisi yanıt veremedi ({(int)response.StatusCode}): {responseJson}";
+                }
+
                 var result = JsonConvert.DeserializeObject<OpenAIResponse>(responseJson);
                 return result?.choices?[0]?.message?.content ?? "";
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"CallAIAsync Error: {ex.Message}");
-                return "AI servisi yanıt veremedi.";
+                return $"AI servisi yanıt veremedi: {ex.Message}";
             }
         }
 

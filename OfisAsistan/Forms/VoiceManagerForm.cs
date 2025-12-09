@@ -149,6 +149,11 @@ namespace OfisAsistan.Forms
                             _voiceService.Speak("Görev oluşturulamadı.");
                         }
                     }
+                    else
+                    {
+                        txtResult.Text = "❌ Sesli komuttan görev bilgileri çıkarılamadı.";
+                        _voiceService.Speak("Görev bilgileri anlaşılamadı, lütfen daha net tekrar edin.");
+                    }
                 }
                 else if (command.ToLower().Contains("rapor") || command.ToLower().Contains("listele") || command.ToLower().Contains("bitmeyen"))
                 {

@@ -22,6 +22,9 @@ namespace OfisAsistan.Forms
         private Button btnRefresh;
         private Button btnBreakDown;
         private TextBox txtBriefing;
+        private ContextMenuStrip pendingMenu;
+        private ContextMenuStrip inProgressMenu;
+        private ContextMenuStrip completedMenu;
 
         public EmployeeWorkspace(DatabaseService databaseService, AIService aiService, int employeeId)
         {
@@ -109,6 +112,26 @@ namespace OfisAsistan.Forms
 
             this.Controls.Add(mainPanel);
             this.Controls.Add(buttonsPanel);
+
+            // Context menüler
+            pendingMenu = new ContextMenuStrip();
+            var miStart = new ToolStripMenuItem("Başlat");
+            miStart.Click += async (s, e) => await ChangeStatusFromMenuAsync(lstPending, TaskStatusModel.InProgress);
+            pendingMenu.Items.Add(miStart);
+
+            inProgressMenu = new ContextMenuStrip();
+            var miCompleteFromInProgress = new ToolStripMenuItem("Tamamla");
+            miCompleteFromInProgress.Click += async (s, e) => await ChangeStatusFromMenuAsync(lstInProgress, TaskStatusModel.Completed);
+            inProgressMenu.Items.Add(miCompleteFromInProgress);
+
+            completedMenu = new ContextMenuStrip();
+            var miCompleteFromCompleted = new ToolStripMenuItem("Tamamla");
+            miCompleteFromCompleted.Click += async (s, e) => await ChangeStatusFromMenuAsync(lstCompleted, TaskStatusModel.Completed);
+            completedMenu.Items.Add(miCompleteFromCompleted);
+
+            lstPending.ContextMenuStrip = pendingMenu;
+            lstInProgress.ContextMenuStrip = inProgressMenu;
+            lstCompleted.ContextMenuStrip = completedMenu;
 
             // Event handlers
             btnRefresh.Click += BtnRefresh_Click;
@@ -268,6 +291,20 @@ namespace OfisAsistan.Forms
             await _databaseService.UpdateTaskAsync(taskItem.Task);
             targetListBox.Items.Add(taskItem);
 
+            LoadData();
+        }
+
+        private async System.Threading.Tasks.Task ChangeStatusFromMenuAsync(ListBox listBox, TaskStatusModel newStatus)
+        {
+            var taskItem = listBox.SelectedItem as TaskItem;
+            if (taskItem == null)
+                return;
+
+            taskItem.Task.Status = newStatus;
+            if (newStatus == TaskStatusModel.Completed)
+                taskItem.Task.CompletedDate = DateTime.Now;
+
+            await _databaseService.UpdateTaskAsync(taskItem.Task);
             LoadData();
         }
 

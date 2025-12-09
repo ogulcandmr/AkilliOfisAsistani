@@ -30,15 +30,39 @@ namespace OfisAsistan
 
         private void InitializeServices()
         {
-            // App.config'den ayarları oku
-            var supabaseUrl = System.Configuration.ConfigurationManager.AppSettings["SupabaseUrl"] ?? "https://your-project.supabase.co";
-            var supabaseKey = System.Configuration.ConfigurationManager.AppSettings["SupabaseKey"] ?? "your-key";
-            var openAIApiKey = System.Configuration.ConfigurationManager.AppSettings["OpenAIApiKey"] ?? "your-key";
-            var openAIUrl = System.Configuration.ConfigurationManager.AppSettings["OpenAIUrl"] ?? "https://api.openai.com";
+            // Ortam değişkenleri > App.config sırası ile ayarları oku
+            var supabaseUrl =
+                Environment.GetEnvironmentVariable("SUPABASE_URL") ??
+                System.Configuration.ConfigurationManager.AppSettings["SupabaseUrl"] ??
+                "https://your-project.supabase.co";
+
+            var supabaseKey =
+                Environment.GetEnvironmentVariable("SUPABASE_KEY") ??
+                System.Configuration.ConfigurationManager.AppSettings["SupabaseKey"] ??
+                "your-key";
+
+            var openAIApiKey =
+                Environment.GetEnvironmentVariable("GROQ_API_KEY") ??
+                System.Configuration.ConfigurationManager.AppSettings["OpenAIApiKey"] ??
+                "your-key";
+
+            var openAIUrl =
+                Environment.GetEnvironmentVariable("GROQ_API_URL") ??
+                System.Configuration.ConfigurationManager.AppSettings["OpenAIUrl"] ??
+                "https://api.openai.com";
 
             _databaseService = new DatabaseService(supabaseUrl, supabaseKey);
             _aiService = new AIService(openAIApiKey, openAIUrl, _databaseService);
-            _voiceService = new VoiceService();
+
+            try
+            {
+                _voiceService = new VoiceService();
+            }
+            catch (PlatformNotSupportedException)
+            {
+                _voiceService = null;
+            }
+
             _notificationService = new NotificationService(_databaseService);
         }
 
@@ -80,7 +104,7 @@ namespace OfisAsistan
 
             mnuManager.Enabled = _currentUser.Role == UserRole.Manager || _currentUser.Role == UserRole.Admin;
             mnuEmployee.Enabled = true;
-            mnuVoice.Enabled = _currentUser.Role == UserRole.Manager || _currentUser.Role == UserRole.Admin;
+            mnuVoice.Enabled = _voiceService != null && (_currentUser.Role == UserRole.Manager || _currentUser.Role == UserRole.Admin);
         }
 
         private void MnuManager_Click(object sender, EventArgs e)

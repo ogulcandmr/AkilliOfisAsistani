@@ -52,7 +52,7 @@ namespace OfisAsistan.Forms
             mainPanel.Controls.Add(txtDescription, 1, 1);
 
             mainPanel.Controls.Add(new Label { Text = "Çalışan:", Dock = DockStyle.Fill }, 0, 2);
-            cmbEmployee = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbEmployee = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "FullName", ValueMember = "Id" };
             mainPanel.Controls.Add(cmbEmployee, 1, 2);
 
             mainPanel.Controls.Add(new Label { Text = "Öncelik:", Dock = DockStyle.Fill }, 0, 3);
@@ -87,9 +87,10 @@ namespace OfisAsistan.Forms
         {
             try
             {
-                var employees = await _databaseService.GetEmployeesAsync();
+                var employees = await _databaseService.GetEmployeesForEmployeeRoleAsync();
+                cmbEmployee.DataSource = null;
                 cmbEmployee.Items.Clear();
-                cmbEmployee.Items.AddRange(employees.Select(e => e.FullName).ToArray());
+                cmbEmployee.DataSource = employees;
 
                 var departments = await _databaseService.GetDepartmentsAsync();
                 cmbDepartment.Items.Clear();
@@ -109,8 +110,7 @@ namespace OfisAsistan.Forms
                 return;
             }
 
-            var employees = await _databaseService.GetEmployeesAsync();
-            var selectedEmployee = employees.FirstOrDefault(emp => emp.FullName == cmbEmployee.SelectedItem?.ToString());
+            var selectedEmployee = cmbEmployee.SelectedItem as Employee;
 
             var task = new TaskModel
             {

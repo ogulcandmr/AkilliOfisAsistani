@@ -44,10 +44,14 @@ namespace OfisAsistan.Services
             {
                 var tasks = await _databaseService.GetTasksAsync();
                 var now = DateTime.Now;
+                var minDate = now.AddDays(-1);
+                var maxDate = now.AddDays(1);
 
                 foreach (var task in tasks.Where(t => 
                     t.Status != TaskStatusModel.Completed && 
                     t.DueDate.HasValue &&
+                    t.DueDate.Value >= minDate &&
+                    t.DueDate.Value <= maxDate &&
                     !_notifiedTaskIds.Contains(t.Id)))
                 {
                     var timeRemaining = task.DueDate.Value - now;

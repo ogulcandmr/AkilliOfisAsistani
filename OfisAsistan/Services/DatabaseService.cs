@@ -59,7 +59,15 @@ namespace OfisAsistan.Services
                 var response = await _httpClient.PostAsync($"{_supabaseUrl}/rest/v1/tasks", content);
                 response.EnsureSuccessStatusCode();
                 var responseJson = await response.Content.ReadAsStringAsync();
-                return JsonConvert.DeserializeObject<TaskModel>(responseJson);
+                var createdTask = JsonConvert.DeserializeObject<TaskModel>(responseJson);
+
+                // Görev bir çalışana atanmışsa iş yükünü güncelle
+                if (createdTask != null && createdTask.AssignedToId > 0)
+                {
+                    await UpdateEmployeeWorkloadAsync(createdTask.AssignedToId);
+                }
+
+                return createdTask;
             }
             catch (Exception ex)
             {
@@ -68,7 +76,7 @@ namespace OfisAsistan.Services
             }
         }
 
-        public async System.Threading.Tasks.Task<bool> UpdateTaskAsync(TaskModel task)
+        public async System.Threading.Tasks.Task<bool> UpdateTaskAsync(TaskModel task, int? previousAssignedToId = null)
         {
             try
             {
@@ -79,12 +87,65 @@ namespace OfisAsistan.Services
                     Content = content
                 };
                 var response = await _httpClient.SendAsync(request);
-                return response.IsSuccessStatusCode;
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    System.Diagnostics.Debug.WriteLine($"UpdateTaskAsync failed: {(int)response.StatusCode} - {response.ReasonPhrase} - {body}");
+                    return false;
+                }
+
+                // İş yüklerini güncelle
+                if (task.AssignedToId > 0)
+                {
+                    await UpdateEmployeeWorkloadAsync(task.AssignedToId);
+                }
+
+                if (previousAssignedToId.HasValue && previousAssignedToId.Value > 0 && previousAssignedToId.Value != task.AssignedToId)
+                {
+                    await UpdateEmployeeWorkloadAsync(previousAssignedToId.Value);
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"UpdateTaskAsync Error: {ex.Message}");
                 return false;
+            }
+        }
+
+        private async System.Threading.Tasks.Task UpdateEmployeeWorkloadAsync(int employeeId)
+        {
+            try
+            {
+                var tasks = await GetTasksAsync(employeeId);
+                var totalHours = tasks
+                    .Where(t => t.Status != TaskStatusModel.Completed && t.Status != TaskStatusModel.Cancelled)
+                    .Sum(t => t.EstimatedHours);
+
+                var payload = new
+                {
+                    current_workload = totalHours
+                };
+
+                var json = JsonConvert.SerializeObject(payload);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var request = new HttpRequestMessage(new HttpMethod("PATCH"), $"{_supabaseUrl}/rest/v1/employees?id=eq.{employeeId}")
+                {
+                    Content = content
+                };
+
+                var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    System.Diagnostics.Debug.WriteLine($"UpdateEmployeeWorkloadAsync failed: {(int)response.StatusCode} - {response.ReasonPhrase} - {body}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"UpdateEmployeeWorkloadAsync Error: {ex.Message}");
             }
         }
 

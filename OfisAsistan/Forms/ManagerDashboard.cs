@@ -229,10 +229,27 @@ namespace OfisAsistan.Forms
             }
 
             var recommendation = await _aiService.RecommendEmployeeForTaskAsync(task);
-            if (recommendation != null)
+            if (recommendation != null && recommendation.RecommendedEmployee != null)
             {
-                var message = $"Önerilen: {recommendation.RecommendedEmployee?.FullName}\n\n{recommendation.Reason}";
-                MessageBox.Show(message, "AI Önerisi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                var message = $"Önerilen: {recommendation.RecommendedEmployee.FullName}\n\n{recommendation.Reason}\n\n" +
+                              "Bu çalışanı göreve atamak ister misiniz?";
+
+                var result = MessageBox.Show(message, "AI Önerisi", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (result == DialogResult.Yes)
+                {
+                    var previousAssignedToId = task.AssignedToId;
+                    task.AssignedToId = recommendation.RecommendedEmployee.Id;
+                    var updated = await _databaseService.UpdateTaskAsync(task, previousAssignedToId);
+                    if (updated)
+                    {
+                        MessageBox.Show("Görev AI önerisine göre güncellendi.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        LoadData();
+                    }
+                    else
+                    {
+                        MessageBox.Show("Görev güncellenemedi.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
             }
         }
 

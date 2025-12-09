@@ -154,8 +154,25 @@ namespace OfisAsistan.Forms
             var recommendation = await _aiService.RecommendEmployeeForTaskAsync(task);
             if (recommendation != null && recommendation.RecommendedEmployee != null)
             {
-                cmbEmployee.SelectedItem = recommendation.RecommendedEmployee.FullName;
-                MessageBox.Show($"AI Önerisi: {recommendation.RecommendedEmployee.FullName}\n\n{recommendation.Reason}", 
+                // DataSource içindeki gerçek Employee nesnesini bul
+                var employees = cmbEmployee.DataSource as System.Collections.IEnumerable;
+                Employee recommended = null;
+                if (employees != null)
+                {
+                    foreach (var item in employees)
+                    {
+                        if (item is Employee emp && emp.Id == recommendation.RecommendedEmployee.Id)
+                        {
+                            recommended = emp;
+                            break;
+                        }
+                    }
+                }
+
+                if (recommended != null)
+                    cmbEmployee.SelectedItem = recommended;
+
+                MessageBox.Show($"AI Önerisi: {recommendation.RecommendedEmployee.FullName}\n\n{recommendation.Reason}",
                     "AI Önerisi", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }

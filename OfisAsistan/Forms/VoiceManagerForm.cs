@@ -1,22 +1,29 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using TaskStatusModel = OfisAsistan.Models.TaskStatus;
 using OfisAsistan.Services;
+using DevExpress.XtraEditors;
+using DevExpress.XtraLayout;
+using DevExpress.Utils;
 
 namespace OfisAsistan.Forms
 {
-    public partial class VoiceManagerForm : Form
+    public partial class VoiceManagerForm : XtraForm
     {
         private VoiceService _voiceService;
         private AIService _aiService;
         private DatabaseService _databaseService;
-        private Button btnStartListening;
-        private Button btnStopListening;
-        private TextBox txtVoiceCommand;
-        private TextBox txtResult;
-        private Label lblStatus;
+        
+        private SimpleButton btnStartListening;
+        private SimpleButton btnStopListening;
+        private TextEdit txtVoiceCommand;
+        private MemoEdit txtResult;
+        private LabelControl lblStatus;
+        private LabelControl lblTitle;
+        private LayoutControl layoutControl;
         private bool _isListening;
 
         public VoiceManagerForm(VoiceService voiceService, AIService aiService, DatabaseService databaseService)
@@ -25,95 +32,71 @@ namespace OfisAsistan.Forms
             _aiService = aiService;
             _databaseService = databaseService;
             InitializeComponent();
+            SetupDevExpressUI();
             SetupVoiceEvents();
         }
 
-        private void InitializeComponent()
+        private void SetupDevExpressUI()
         {
-            this.Text = "Sesli Yönetici";
+            this.Text = "Sesli Yönetici Asistanı";
             this.Size = new Size(800, 600);
             this.StartPosition = FormStartPosition.CenterScreen;
 
-            // Ana panel
-            var mainPanel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 5
-            };
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 30F));
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            layoutControl = new LayoutControl { Dock = DockStyle.Fill };
+            this.Controls.Add(layoutControl);
 
-            // Başlık
-            var titleLabel = new Label
+            lblTitle = new LabelControl
             {
-                Text = "🎤 Sesli Yönetici Modülü",
-                Font = new Font("Arial", 16, FontStyle.Bold),
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleCenter
+                Text = "🎤 SESLİ YÖNETİCİ MODÜLÜ",
+                Appearance = { Font = new Font("Segoe UI", 18, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Center } },
+                AutoSizeMode = LabelAutoSizeMode.None,
+                Height = 50
             };
 
-            // Butonlar
-            var buttonsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill };
-            btnStartListening = new Button
-            {
-                Text = "▶ Dinlemeyi Başlat",
-                Size = new Size(150, 40),
-                BackColor = Color.Green,
-                ForeColor = Color.White,
-                Font = new Font("Arial", 10, FontStyle.Bold)
-            };
-            btnStopListening = new Button
-            {
-                Text = "⏹ Dinlemeyi Durdur",
-                Size = new Size(150, 40),
-                BackColor = Color.Red,
-                ForeColor = Color.White,
-                Font = new Font("Arial", 10, FontStyle.Bold),
-                Enabled = false
-            };
-            buttonsPanel.Controls.Add(btnStartListening);
-            buttonsPanel.Controls.Add(btnStopListening);
+            btnStartListening = new SimpleButton { Text = "Dinlemeyi Başlat", ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("actions_play.svg") }, Appearance = { BackColor = Color.FromArgb(76, 175, 80), ForeColor = Color.White } };
+            btnStopListening = new SimpleButton { Text = "Dinlemeyi Durdur", ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("actions_pause.svg") }, Enabled = false, Appearance = { BackColor = Color.FromArgb(244, 67, 54), ForeColor = Color.White } };
 
-            // Komut girişi
-            var commandLabel = new Label { Text = "Tanınan Komut:", Dock = DockStyle.Fill, Height = 25 };
-            txtVoiceCommand = new TextBox { Dock = DockStyle.Fill, ReadOnly = true, Font = new Font("Arial", 11) };
-
-            // Sonuç
-            var resultLabel = new Label { Text = "İşlem Sonucu:", Dock = DockStyle.Fill, Height = 25 };
-            txtResult = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = new Font("Arial", 10) };
-
-            // Durum
-            lblStatus = new Label
+            txtVoiceCommand = new TextEdit { Properties = { ReadOnly = true }, Font = new Font("Segoe UI", 12) };
+            txtResult = new MemoEdit { Properties = { ReadOnly = true }, Font = new Font("Consolas", 10) };
+            
+            lblStatus = new LabelControl
             {
-                Text = "Hazır",
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleCenter,
-                BackColor = Color.LightGray,
-                Font = new Font("Arial", 10, FontStyle.Bold)
+                Text = "HAZIR",
+                Appearance = { Font = new Font("Segoe UI", 10, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Center }, BackColor = Color.LightGray },
+                AutoSizeMode = LabelAutoSizeMode.None,
+                Height = 30
             };
 
-            mainPanel.Controls.Add(titleLabel, 0, 0);
-            mainPanel.Controls.Add(buttonsPanel, 0, 1);
-            mainPanel.Controls.Add(commandLabel, 0, 2);
-            mainPanel.Controls.Add(txtVoiceCommand, 0, 2);
-            mainPanel.Controls.Add(resultLabel, 0, 3);
-            mainPanel.Controls.Add(txtResult, 0, 3);
-            mainPanel.Controls.Add(lblStatus, 0, 4);
+            var group = layoutControl.Root;
+            group.AddItem(null, lblTitle).TextVisible = false;
+            
+            var btnGroup = group.AddGroup();
+            btnGroup.LayoutMode = DevExpress.XtraLayout.Utils.LayoutMode.Table;
+            btnGroup.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 50 });
+            btnGroup.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 50 });
+            btnGroup.OptionsTableLayoutGroup.RowDefinitions.Add(new RowDefinition { SizeType = SizeType.AutoSize });
+            btnGroup.AddItem(null, btnStartListening).OptionsTableLayoutItem.ColumnIndex = 0;
+            btnGroup.AddItem(null, btnStopListening).OptionsTableLayoutItem.ColumnIndex = 1;
 
-            this.Controls.Add(mainPanel);
+            group.AddItem("Algılanan Komut", txtVoiceCommand).TextLocation = Locations.Top;
+            group.AddItem("İşlem Sonucu", txtResult).TextLocation = Locations.Top;
+            group.AddItem(null, lblStatus).TextVisible = false;
 
-            // Event handlers
             btnStartListening.Click += BtnStartListening_Click;
             btnStopListening.Click += BtnStopListening_Click;
         }
 
+        private void InitializeComponent()
+        {
+            this.SuspendLayout();
+            this.Name = "VoiceManagerForm";
+            this.ResumeLayout(false);
+        }
+
         private void SetupVoiceEvents()
         {
-            _voiceService.VoiceCommandReceived += VoiceService_VoiceCommandReceived;
+            if (_voiceService != null)
+                _voiceService.VoiceCommandReceived += VoiceService_VoiceCommandReceived;
         }
 
         private async void VoiceService_VoiceCommandReceived(object sender, string command)
@@ -125,97 +108,68 @@ namespace OfisAsistan.Forms
             }
 
             txtVoiceCommand.Text = command;
-            lblStatus.Text = "Komut işleniyor...";
-            lblStatus.BackColor = Color.Yellow;
+            lblStatus.Text = "İŞLENİYOR...";
+            lblStatus.Appearance.BackColor = Color.Orange;
 
             try
             {
-                // Komut analizi
                 if (command.ToLower().Contains("görev ata") || command.ToLower().Contains("yeni görev"))
                 {
-                    // Sesli görev atama
                     var task = await _aiService.ParseVoiceCommandToTaskAsync(command);
                     if (task != null)
                     {
-                        var createdTask = await _databaseService.CreateTaskAsync(task);
-                        if (createdTask != null)
+                        var created = await _databaseService.CreateTaskAsync(task);
+                        if (created != null)
                         {
-                            txtResult.Text = $"✅ Görev oluşturuldu:\nBaşlık: {createdTask.Title}\nAtanan: {createdTask.AssignedToId}\nTeslim: {createdTask.DueDate?.ToString("dd.MM.yyyy") ?? "Belirtilmemiş"}";
-                            _voiceService.Speak($"Görev başarıyla oluşturuldu. {createdTask.Title}");
+                            txtResult.Text = $"✅ Görev oluşturuldu:\nBaşlık: {created.Title}\nAtanan: {created.AssignedToId}\nTeslim: {created.DueDate?.ToShortDateString()}";
+                            _voiceService?.Speak("Görev başarıyla oluşturuldu.");
                         }
-                        else
-                        {
-                            txtResult.Text = "❌ Görev oluşturulamadı.";
-                            _voiceService.Speak("Görev oluşturulamadı.");
-                        }
-                    }
-                    else
-                    {
-                        txtResult.Text = "❌ Sesli komuttan görev bilgileri çıkarılamadı.";
-                        _voiceService.Speak("Görev bilgileri anlaşılamadı, lütfen daha net tekrar edin.");
                     }
                 }
-                else if (command.ToLower().Contains("rapor") || command.ToLower().Contains("listele") || command.ToLower().Contains("bitmeyen"))
+                else if (command.ToLower().Contains("rapor") || command.ToLower().Contains("listele"))
                 {
-                    // Sesli rapor sorgulama
                     var tasks = await _databaseService.GetTasksAsync();
-                    var incompleteTasks = tasks.FindAll(t => t.Status != TaskStatusModel.Completed);
-                    
-                    var report = $"📊 Rapor:\n\n";
-                    report += $"Toplam Bitmeyen İş: {incompleteTasks.Count}\n\n";
-                    
-                    foreach (var task in incompleteTasks.Take(10))
-                    {
-                        report += $"• {task.Title} (Öncelik: {task.Priority}, Teslim: {task.DueDate?.ToString("dd.MM.yyyy") ?? "Belirtilmemiş"})\n";
-                    }
-
+                    var report = $"📊 Rapor:\n\nToplam Bitmeyen İş: {tasks.Count(t => t.Status != TaskStatusModel.Completed)}\n\n";
+                    foreach (var t in tasks.Where(t => t.Status != TaskStatusModel.Completed).Take(5))
+                        report += $"• {t.Title} ({t.Priority})\n";
                     txtResult.Text = report;
-                    _voiceService.Speak($"Toplam {incompleteTasks.Count} bitmeyen iş var.");
+                    _voiceService?.Speak("Rapor hazırlandı.");
                 }
-                else
-                {
-                    txtResult.Text = $"ℹ️ Komut tanındı ancak işlenemedi: {command}";
-                    _voiceService.Speak("Komut anlaşılamadı. Lütfen tekrar deneyin.");
-                }
-
-                lblStatus.Text = "Hazır";
-                lblStatus.BackColor = Color.LightGreen;
+                lblStatus.Text = "TAMAMLANDI";
+                lblStatus.Appearance.BackColor = Color.LightGreen;
             }
             catch (Exception ex)
             {
-                txtResult.Text = $"❌ Hata: {ex.Message}";
-                lblStatus.Text = "Hata";
-                lblStatus.BackColor = Color.Red;
-                _voiceService.Speak("Bir hata oluştu.");
+                txtResult.Text = "Hata: " + ex.Message;
+                lblStatus.Text = "HATA";
+                lblStatus.Appearance.BackColor = Color.Red;
             }
         }
 
         private void BtnStartListening_Click(object sender, EventArgs e)
         {
-            _voiceService.StartListening();
+            _voiceService?.StartListening();
             _isListening = true;
             btnStartListening.Enabled = false;
             btnStopListening.Enabled = true;
-            lblStatus.Text = "Dinleniyor...";
-            lblStatus.BackColor = Color.Green;
+            lblStatus.Text = "DİNLENİYOR...";
+            lblStatus.Appearance.BackColor = Color.LimeGreen;
         }
 
         private void BtnStopListening_Click(object sender, EventArgs e)
         {
-            _voiceService.StopListening();
+            _voiceService?.StopListening();
             _isListening = false;
             btnStartListening.Enabled = true;
             btnStopListening.Enabled = false;
-            lblStatus.Text = "Durduruldu";
-            lblStatus.BackColor = Color.LightGray;
+            lblStatus.Text = "DURDURULDU";
+            lblStatus.Appearance.BackColor = Color.LightGray;
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (_isListening)
-                _voiceService.StopListening();
+            if (_isListening) _voiceService?.StopListening();
             base.OnFormClosing(e);
         }
     }
 }
-

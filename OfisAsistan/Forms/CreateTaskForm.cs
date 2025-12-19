@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
@@ -6,81 +7,92 @@ using TaskModel = OfisAsistan.Models.Task;
 using TaskStatusModel = OfisAsistan.Models.TaskStatus;
 using OfisAsistan.Models;
 using OfisAsistan.Services;
+using DevExpress.XtraEditors;
+using DevExpress.XtraLayout;
+using DevExpress.Utils;
 
 namespace OfisAsistan.Forms
 {
-    public partial class CreateTaskForm : Form
+    public partial class CreateTaskForm : XtraForm
     {
         private DatabaseService _databaseService;
         private AIService _aiService;
-        private TextBox txtTitle;
-        private TextBox txtDescription;
-        private ComboBox cmbEmployee;
-        private ComboBox cmbPriority;
-        private ComboBox cmbDepartment;
-        private DateTimePicker dtpDueDate;
-        private Button btnSave;
-        private Button btnAIRecommend;
+        
+        private TextEdit txtTitle;
+        private MemoEdit txtDescription;
+        private LookUpEdit lueEmployee;
+        private ComboBoxEdit cmbPriority;
+        private ComboBoxEdit cmbDepartment;
+        private DateEdit deDueDate;
+        private SimpleButton btnSave;
+        private SimpleButton btnAIRecommend;
+        private LayoutControl layoutControl;
 
         public CreateTaskForm(DatabaseService databaseService, AIService aiService)
         {
             _databaseService = databaseService;
             _aiService = aiService;
             InitializeComponent();
+            SetupDevExpressUI();
+            this.Load += CreateTaskForm_Load;
+        }
+
+        private void CreateTaskForm_Load(object sender, EventArgs e)
+        {
             LoadEmployees();
+        }
+
+        private void SetupDevExpressUI()
+        {
+            this.Text = "Yeni Görev Oluştur";
+            this.Size = new Size(500, 500);
+            this.StartPosition = FormStartPosition.CenterParent;
+
+            layoutControl = new LayoutControl { Dock = DockStyle.Fill };
+            this.Controls.Add(layoutControl);
+
+            txtTitle = new TextEdit();
+            txtDescription = new MemoEdit { Height = 100 };
+            
+            lueEmployee = new LookUpEdit();
+            lueEmployee.Properties.DisplayMember = "FullName";
+            lueEmployee.Properties.ValueMember = "Id";
+            lueEmployee.Properties.Columns.Add(new DevExpress.XtraEditors.Controls.LookUpColumnInfo("FullName", "Çalışan Adı"));
+            lueEmployee.Properties.NullText = "Çalışan Seçiniz";
+
+            cmbPriority = new ComboBoxEdit();
+            cmbPriority.Properties.Items.AddRange(new[] { "Düşük", "Normal", "Yüksek", "Kritik" });
+            cmbPriority.SelectedIndex = 1;
+
+            cmbDepartment = new ComboBoxEdit();
+            cmbDepartment.Properties.NullText = "Departman Seçiniz";
+
+            deDueDate = new DateEdit();
+            deDueDate.Properties.CalendarTimeProperties.Buttons.Add(new DevExpress.XtraEditors.Controls.EditorButton());
+            deDueDate.DateTime = DateTime.Now.AddDays(1);
+
+            btnAIRecommend = new SimpleButton { Text = "AI Öneri Al", ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("outlook%20inspired/pivottable.svg") } };
+            btnSave = new SimpleButton { Text = "Görevi Oluştur", Appearance = { Font = new Font("Segoe UI", 10, FontStyle.Bold), BackColor = Color.FromArgb(0, 120, 215), ForeColor = Color.White } };
+
+            var group = layoutControl.Root;
+            group.AddItem("Görev Başlığı", txtTitle).TextLocation = Locations.Top;
+            group.AddItem("Açıklama", txtDescription).TextLocation = Locations.Top;
+            group.AddItem("Atanacak Çalışan", lueEmployee).TextLocation = Locations.Top;
+            group.AddItem("Öncelik", cmbPriority).TextLocation = Locations.Top;
+            group.AddItem("Departman", cmbDepartment).TextLocation = Locations.Top;
+            group.AddItem("Teslim Tarihi", deDueDate).TextLocation = Locations.Top;
+            group.AddItem(null, btnAIRecommend).Padding = new DevExpress.XtraLayout.Utils.Padding(0, 0, 10, 10);
+            group.AddItem(null, btnSave);
+
+            btnSave.Click += BtnSave_Click;
+            btnAIRecommend.Click += BtnAIRecommend_Click;
         }
 
         private void InitializeComponent()
         {
-            this.Text = "Yeni Görev Oluştur";
-            this.Size = new Size(500, 400);
-            this.StartPosition = FormStartPosition.CenterScreen;
-
-            var mainPanel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 8
-            };
-
-            mainPanel.Controls.Add(new Label { Text = "Başlık:", Dock = DockStyle.Fill }, 0, 0);
-            txtTitle = new TextBox { Dock = DockStyle.Fill };
-            mainPanel.Controls.Add(txtTitle, 1, 0);
-
-            mainPanel.Controls.Add(new Label { Text = "Açıklama:", Dock = DockStyle.Fill }, 0, 1);
-            txtDescription = new TextBox { Dock = DockStyle.Fill, Multiline = true, Height = 60 };
-            mainPanel.Controls.Add(txtDescription, 1, 1);
-
-            mainPanel.Controls.Add(new Label { Text = "Çalışan:", Dock = DockStyle.Fill }, 0, 2);
-            cmbEmployee = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "FullName", ValueMember = "Id" };
-            mainPanel.Controls.Add(cmbEmployee, 1, 2);
-
-            mainPanel.Controls.Add(new Label { Text = "Öncelik:", Dock = DockStyle.Fill }, 0, 3);
-            cmbPriority = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbPriority.Items.AddRange(new[] { "Düşük", "Normal", "Yüksek", "Kritik" });
-            cmbPriority.SelectedIndex = 1;
-            mainPanel.Controls.Add(cmbPriority, 1, 3);
-
-            mainPanel.Controls.Add(new Label { Text = "Departman:", Dock = DockStyle.Fill }, 0, 4);
-            cmbDepartment = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-            mainPanel.Controls.Add(cmbDepartment, 1, 4);
-
-            mainPanel.Controls.Add(new Label { Text = "Teslim Tarihi:", Dock = DockStyle.Fill }, 0, 5);
-            dtpDueDate = new DateTimePicker { Dock = DockStyle.Fill };
-            mainPanel.Controls.Add(dtpDueDate, 1, 5);
-
-            btnAIRecommend = new Button { Text = "AI Öneri Al", Dock = DockStyle.Fill };
-            mainPanel.Controls.Add(btnAIRecommend, 0, 6);
-            mainPanel.SetColumnSpan(btnAIRecommend, 2);
-
-            btnSave = new Button { Text = "Kaydet", Dock = DockStyle.Fill, BackColor = Color.Green, ForeColor = Color.White };
-            mainPanel.Controls.Add(btnSave, 0, 7);
-            mainPanel.SetColumnSpan(btnSave, 2);
-
-            this.Controls.Add(mainPanel);
-
-            btnSave.Click += BtnSave_Click;
-            btnAIRecommend.Click += BtnAIRecommend_Click;
+            this.SuspendLayout();
+            this.Name = "CreateTaskForm";
+            this.ResumeLayout(false);
         }
 
         private async void LoadEmployees()
@@ -88,94 +100,87 @@ namespace OfisAsistan.Forms
             try
             {
                 var employees = await _databaseService.GetEmployeesForEmployeeRoleAsync();
-                cmbEmployee.DataSource = null;
-                cmbEmployee.Items.Clear();
-                cmbEmployee.DataSource = employees;
+                lueEmployee.Properties.DataSource = employees;
 
                 var departments = await _databaseService.GetDepartmentsAsync();
-                cmbDepartment.Items.Clear();
-                cmbDepartment.Items.AddRange(departments.Select(d => d.Name).ToArray());
+                cmbDepartment.Properties.Items.Clear();
+                cmbDepartment.Properties.Items.AddRange(departments.Select(d => d.Name).ToArray());
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Veri yüklenirken hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                XtraMessageBox.Show($"Veri yüklenirken hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private async void BtnSave_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtTitle.Text))
+            try
             {
-                MessageBox.Show("Başlık gerekli.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                if (string.IsNullOrWhiteSpace(txtTitle.Text))
+                {
+                    XtraMessageBox.Show("Başlık gerekli.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var task = new TaskModel
+                {
+                    Title = txtTitle.Text,
+                    Description = txtDescription.Text,
+                    AssignedToId = (int?)lueEmployee.EditValue ?? 0,
+                    Priority = (TaskPriority)cmbPriority.SelectedIndex,
+                    DueDate = deDueDate.DateTime,
+                    CreatedDate = DateTime.Now,
+                    Status = TaskStatusModel.Pending
+                };
+
+                if (await _databaseService.CreateTaskAsync(task) != null)
+                {
+                    XtraMessageBox.Show("Görev oluşturuldu.", "Başarılı", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    this.DialogResult = DialogResult.OK;
+                    this.Close();
+                }
+                else
+                {
+                    XtraMessageBox.Show("Görev oluşturulurken hata oluştu.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
-
-            var selectedEmployee = cmbEmployee.SelectedItem as Employee;
-
-            var task = new TaskModel
+            catch (Exception ex)
             {
-                Title = txtTitle.Text,
-                Description = txtDescription.Text,
-                AssignedToId = selectedEmployee?.Id ?? 0,
-                Priority = (TaskPriority)cmbPriority.SelectedIndex,
-                DueDate = dtpDueDate.Value,
-                CreatedDate = DateTime.Now,
-                Status = TaskStatusModel.Pending
-            };
-
-            var result = await _databaseService.CreateTaskAsync(task);
-            if (result != null)
-            {
-                MessageBox.Show("Görev oluşturuldu.", "Başarılı", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                this.DialogResult = DialogResult.OK;
-                this.Close();
-            }
-            else
-            {
-                MessageBox.Show("Görev oluşturulamadı.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                XtraMessageBox.Show($"Görev kaydedilirken hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private async void BtnAIRecommend_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtTitle.Text))
+            try
             {
-                MessageBox.Show("Önce görev başlığını girin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var task = new TaskModel
-            {
-                Title = txtTitle.Text,
-                Description = txtDescription.Text,
-                Priority = (TaskPriority)cmbPriority.SelectedIndex
-            };
-
-            var recommendation = await _aiService.RecommendEmployeeForTaskAsync(task);
-            if (recommendation != null && recommendation.RecommendedEmployee != null)
-            {
-                // DataSource içindeki gerçek Employee nesnesini bul
-                var employees = cmbEmployee.DataSource as System.Collections.IEnumerable;
-                Employee recommended = null;
-                if (employees != null)
+                if (string.IsNullOrWhiteSpace(txtTitle.Text))
                 {
-                    foreach (var item in employees)
-                    {
-                        if (item is Employee emp && emp.Id == recommendation.RecommendedEmployee.Id)
-                        {
-                            recommended = emp;
-                            break;
-                        }
-                    }
+                    XtraMessageBox.Show("Önce başlığı girin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
                 }
-
-                if (recommended != null)
-                    cmbEmployee.SelectedItem = recommended;
-
-                MessageBox.Show($"AI Önerisi: {recommendation.RecommendedEmployee.FullName}\n\n{recommendation.Reason}",
-                    "AI Önerisi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                
+                var recommendation = await _aiService.RecommendEmployeeForTaskAsync(new TaskModel 
+                { 
+                    Title = txtTitle.Text, 
+                    Description = txtDescription.Text, 
+                    Priority = (TaskPriority)cmbPriority.SelectedIndex 
+                });
+                
+                if (recommendation?.RecommendedEmployee != null)
+                {
+                    lueEmployee.EditValue = recommendation.RecommendedEmployee.Id;
+                    XtraMessageBox.Show(recommendation.Reason, "AI Önerisi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    XtraMessageBox.Show("AI önerisi alınamadı.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                XtraMessageBox.Show($"AI önerisi alınırken hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
     }
 }
-

@@ -1,3 +1,4 @@
+using DevExpress.XtraEditors;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -124,7 +125,7 @@ namespace OfisAsistan.Services
             {
                 form.Invoke(new Action(() =>
                 {
-                    var result = MessageBox.Show(
+                    var result = XtraMessageBox.Show(
                         message,
                         title,
                         MessageBoxButtons.OK,

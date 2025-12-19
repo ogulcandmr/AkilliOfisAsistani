@@ -1,39 +1,87 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using TaskModel = OfisAsistan.Models.Task;
 using OfisAsistan.Models;
 using OfisAsistan.Services;
+using DevExpress.XtraEditors;
+using DevExpress.XtraLayout;
+using DevExpress.Utils;
 
 namespace OfisAsistan.Forms
 {
-    public partial class TaskDetailForm : Form
+    public partial class TaskDetailForm : XtraForm
     {
         private DatabaseService _databaseService;
         private int _taskId;
         private TaskModel _task;
-        private TextBox txtTitle;
-        private TextBox txtDescription;
-        private ComboBox cmbStatus;
-        private ComboBox cmbPriority;
-        private DateTimePicker dtpDueDate;
-        private ComboBox cmbEmployee;
-        private Button btnSave;
+        
+        private TextEdit txtTitle;
+        private MemoEdit txtDescription;
+        private ComboBoxEdit cmbStatus;
+        private ComboBoxEdit cmbPriority;
+        private DateEdit deDueDate;
+        private LookUpEdit lueEmployee;
+        private SimpleButton btnSave;
+        private LayoutControl layoutControl;
 
         public TaskDetailForm(DatabaseService databaseService, int taskId)
         {
             _databaseService = databaseService;
             _taskId = taskId;
             InitializeComponent();
+            SetupDevExpressUI();
             LoadTask();
+        }
+
+        private void SetupDevExpressUI()
+        {
+            this.Text = "Görev Detay Bilgileri";
+            this.Size = new Size(600, 550);
+            this.StartPosition = FormStartPosition.CenterParent;
+
+            layoutControl = new LayoutControl { Dock = DockStyle.Fill };
+            this.Controls.Add(layoutControl);
+
+            txtTitle = new TextEdit();
+            txtDescription = new MemoEdit { Height = 100 };
+            
+            cmbStatus = new ComboBoxEdit();
+            cmbStatus.Properties.Items.AddRange(Enum.GetNames(typeof(OfisAsistan.Models.TaskStatus)));
+
+            cmbPriority = new ComboBoxEdit();
+            cmbPriority.Properties.Items.AddRange(Enum.GetNames(typeof(TaskPriority)));
+
+            deDueDate = new DateEdit();
+            deDueDate.Properties.CalendarTimeProperties.Buttons.Add(new DevExpress.XtraEditors.Controls.EditorButton());
+
+            lueEmployee = new LookUpEdit();
+            lueEmployee.Properties.DisplayMember = "FullName";
+            lueEmployee.Properties.ValueMember = "Id";
+            lueEmployee.Properties.Columns.Add(new DevExpress.XtraEditors.Controls.LookUpColumnInfo("FullName", "Çalışan Adı"));
+            lueEmployee.Properties.NullText = "Çalışan Seçiniz";
+
+            btnSave = new SimpleButton { Text = "Değişiklikleri Kaydet", Appearance = { Font = new Font("Segoe UI", 10, FontStyle.Bold), BackColor = Color.FromArgb(0, 120, 215), ForeColor = Color.White } };
+
+            var group = layoutControl.Root;
+            group.AddItem("Görev Başlığı", txtTitle).TextLocation = Locations.Top;
+            group.AddItem("Açıklama", txtDescription).TextLocation = Locations.Top;
+            group.AddItem("Durum", cmbStatus).TextLocation = Locations.Top;
+            group.AddItem("Öncelik", cmbPriority).TextLocation = Locations.Top;
+            group.AddItem("Teslim Tarihi", deDueDate).TextLocation = Locations.Top;
+            group.AddItem("Sorumlu Çalışan", lueEmployee).TextLocation = Locations.Top;
+            group.AddItem(null, btnSave).Padding = new DevExpress.XtraLayout.Utils.Padding(0, 0, 20, 0);
+
+            btnSave.Click += async (s, e) => await SaveTaskAsync();
         }
 
         private void InitializeComponent()
         {
-            this.Text = "Görev Detayı";
-            this.Size = new Size(600, 500);
-            this.StartPosition = FormStartPosition.CenterScreen;
+            this.SuspendLayout();
+            this.Name = "TaskDetailForm";
+            this.ResumeLayout(false);
         }
 
         private async void LoadTask()
@@ -45,98 +93,44 @@ namespace OfisAsistan.Forms
 
                 if (_task == null)
                 {
-                    MessageBox.Show("Görev bulunamadı.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    XtraMessageBox.Show("Görev bulunamadı.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     this.Close();
                     return;
                 }
 
-                var mainPanel = new TableLayoutPanel
-                {
-                    Dock = DockStyle.Fill,
-                    ColumnCount = 2,
-                    RowCount = 8
-                };
-
-                mainPanel.Controls.Add(new Label { Text = "Başlık:", Dock = DockStyle.Fill }, 0, 0);
-                txtTitle = new TextBox { Dock = DockStyle.Fill, Text = _task.Title };
-                mainPanel.Controls.Add(txtTitle, 1, 0);
-
-                mainPanel.Controls.Add(new Label { Text = "Açıklama:", Dock = DockStyle.Fill }, 0, 1);
-                txtDescription = new TextBox { Dock = DockStyle.Fill, Multiline = true, Height = 80, Text = _task.Description ?? string.Empty };
-                mainPanel.Controls.Add(txtDescription, 1, 1);
-
-                mainPanel.Controls.Add(new Label { Text = "Durum:", Dock = DockStyle.Fill }, 0, 2);
-                cmbStatus = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-                cmbStatus.Items.AddRange(Enum.GetNames(typeof(TaskStatus)));
+                txtTitle.Text = _task.Title;
+                txtDescription.Text = _task.Description;
                 cmbStatus.SelectedItem = _task.Status.ToString();
-                mainPanel.Controls.Add(cmbStatus, 1, 2);
-
-                mainPanel.Controls.Add(new Label { Text = "Öncelik:", Dock = DockStyle.Fill }, 0, 3);
-                cmbPriority = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-                cmbPriority.Items.AddRange(Enum.GetNames(typeof(TaskPriority)));
                 cmbPriority.SelectedItem = _task.Priority.ToString();
-                mainPanel.Controls.Add(cmbPriority, 1, 3);
-
-                mainPanel.Controls.Add(new Label { Text = "Teslim Tarihi:", Dock = DockStyle.Fill }, 0, 4);
-                dtpDueDate = new DateTimePicker { Dock = DockStyle.Fill, Format = DateTimePickerFormat.Custom, CustomFormat = "dd.MM.yyyy HH:mm" };
-                dtpDueDate.Value = _task.DueDate ?? DateTime.Now;
-                mainPanel.Controls.Add(dtpDueDate, 1, 4);
-
-                mainPanel.Controls.Add(new Label { Text = "Çalışan:", Dock = DockStyle.Fill }, 0, 5);
-                cmbEmployee = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "FullName", ValueMember = "Id" };
-                mainPanel.Controls.Add(cmbEmployee, 1, 5);
-
-                btnSave = new Button { Text = "Kaydet", Dock = DockStyle.Fill, BackColor = Color.SteelBlue, ForeColor = Color.White };
-                mainPanel.Controls.Add(btnSave, 0, 7);
-                mainPanel.SetColumnSpan(btnSave, 2);
-
-                btnSave.Click += async (s, e) => await SaveTaskAsync();
-
-                this.Controls.Add(mainPanel);
+                deDueDate.DateTime = _task.DueDate ?? DateTime.Now;
 
                 var employees = await _databaseService.GetEmployeesForEmployeeRoleAsync();
-                cmbEmployee.DataSource = employees;
-                var currentEmployee = employees.FirstOrDefault(emp => emp.Id == _task.AssignedToId);
-                if (currentEmployee != null)
-                    cmbEmployee.SelectedItem = currentEmployee;
+                lueEmployee.Properties.DataSource = employees;
+                lueEmployee.EditValue = _task.AssignedToId;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                XtraMessageBox.Show($"Hata: {ex.Message}");
             }
         }
 
         private async System.Threading.Tasks.Task SaveTaskAsync()
         {
-            if (_task == null)
-                return;
+            if (_task == null) return;
 
             _task.Title = txtTitle.Text;
             _task.Description = txtDescription.Text;
+            if (Enum.TryParse<OfisAsistan.Models.TaskStatus>(cmbStatus.SelectedItem?.ToString(), out var status)) _task.Status = status;
+            if (Enum.TryParse<TaskPriority>(cmbPriority.SelectedItem?.ToString(), out var priority)) _task.Priority = priority;
+            _task.DueDate = deDueDate.DateTime;
+            _task.AssignedToId = (int?)lueEmployee.EditValue ?? 0;
 
-            if (Enum.TryParse<TaskStatus>(cmbStatus.SelectedItem?.ToString(), out var status))
-                _task.Status = status;
-
-            if (Enum.TryParse<TaskPriority>(cmbPriority.SelectedItem?.ToString(), out var priority))
-                _task.Priority = priority;
-
-            _task.DueDate = dtpDueDate.Value;
-
-            var selectedEmployee = cmbEmployee.SelectedItem as Employee;
-            if (selectedEmployee != null)
-                _task.AssignedToId = selectedEmployee.Id;
-
-            var success = await _databaseService.UpdateTaskAsync(_task);
-            if (success)
+            if (await _databaseService.UpdateTaskAsync(_task))
             {
-                MessageBox.Show("Görev güncellendi.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                XtraMessageBox.Show("Görev güncellendi.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 this.DialogResult = DialogResult.OK;
-                this.Close();
             }
-            else
-            {
-                MessageBox.Show("Görev güncellenemedi.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            else XtraMessageBox.Show("Hata oluştu.");
         }
     }
 }

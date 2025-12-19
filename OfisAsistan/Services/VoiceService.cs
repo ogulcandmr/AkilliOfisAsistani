@@ -1,3 +1,4 @@
+using DevExpress.XtraEditors;
 using System;
 using System.Speech.Recognition;
 using System.Speech.Synthesis;
@@ -32,7 +33,7 @@ namespace OfisAsistan.Services
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ses tanıma başlatılamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                XtraMessageBox.Show($"Ses tanıma başlatılamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -75,7 +76,7 @@ namespace OfisAsistan.Services
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Dinleme başlatılamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                XtraMessageBox.Show($"Dinleme başlatılamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -91,7 +92,7 @@ namespace OfisAsistan.Services
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Dinleme durdurulamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                XtraMessageBox.Show($"Dinleme durdurulamadı: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

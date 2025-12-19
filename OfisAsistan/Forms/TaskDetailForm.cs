@@ -33,6 +33,11 @@ namespace OfisAsistan.Forms
             _taskId = taskId;
             InitializeComponent();
             SetupDevExpressUI();
+            this.Load += TaskDetailForm_Load;
+        }
+
+        private void TaskDetailForm_Load(object sender, EventArgs e)
+        {
             LoadTask();
         }
 
@@ -74,7 +79,7 @@ namespace OfisAsistan.Forms
             group.AddItem("Sorumlu Çalışan", lueEmployee).TextLocation = Locations.Top;
             group.AddItem(null, btnSave).Padding = new DevExpress.XtraLayout.Utils.Padding(0, 0, 20, 0);
 
-            btnSave.Click += async (s, e) => await SaveTaskAsync();
+            btnSave.Click += BtnSave_Click;
         }
 
         private void InitializeComponent()
@@ -114,23 +119,46 @@ namespace OfisAsistan.Forms
             }
         }
 
-        private async System.Threading.Tasks.Task SaveTaskAsync()
+        private async void BtnSave_Click(object sender, EventArgs e)
         {
-            if (_task == null) return;
-
-            _task.Title = txtTitle.Text;
-            _task.Description = txtDescription.Text;
-            if (Enum.TryParse<OfisAsistan.Models.TaskStatus>(cmbStatus.SelectedItem?.ToString(), out var status)) _task.Status = status;
-            if (Enum.TryParse<TaskPriority>(cmbPriority.SelectedItem?.ToString(), out var priority)) _task.Priority = priority;
-            _task.DueDate = deDueDate.DateTime;
-            _task.AssignedToId = (int?)lueEmployee.EditValue ?? 0;
-
-            if (await _databaseService.UpdateTaskAsync(_task))
+            try
             {
-                XtraMessageBox.Show("Görev güncellendi.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                this.DialogResult = DialogResult.OK;
+                if (_task == null)
+                {
+                    XtraMessageBox.Show("Görev verisi yüklenemedi.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(txtTitle.Text))
+                {
+                    XtraMessageBox.Show("Görev başlığı gerekli.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                _task.Title = txtTitle.Text;
+                _task.Description = txtDescription.Text;
+                if (Enum.TryParse<OfisAsistan.Models.TaskStatus>(cmbStatus.SelectedItem?.ToString(), out var status)) 
+                    _task.Status = status;
+                if (Enum.TryParse<TaskPriority>(cmbPriority.SelectedItem?.ToString(), out var priority)) 
+                    _task.Priority = priority;
+                _task.DueDate = deDueDate.DateTime;
+                _task.AssignedToId = (int?)lueEmployee.EditValue ?? 0;
+
+                if (await _databaseService.UpdateTaskAsync(_task))
+                {
+                    XtraMessageBox.Show("Görev güncellendi.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    this.DialogResult = DialogResult.OK;
+                    this.Close();
+                }
+                else
+                {
+                    XtraMessageBox.Show("Görev güncellenirken hata oluştu.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
-            else XtraMessageBox.Show("Hata oluştu.");
+            catch (Exception ex)
+            {
+                XtraMessageBox.Show($"Kaydetme hatası: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 }

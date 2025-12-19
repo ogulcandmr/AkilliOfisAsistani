@@ -12,473 +12,211 @@ using DevExpress.XtraGrid;
 using DevExpress.XtraGrid.Views.Grid;
 using DevExpress.XtraLayout;
 using DevExpress.Utils;
-using DevExpress.XtraBars;
 
 namespace OfisAsistan.Forms
 {
     public partial class ManagerDashboard : XtraForm
     {
-        private DatabaseService _databaseService;
-        private AIService _aiService;
-        private NotificationService _notificationService;
-        
-        private GridControl gcTasks;
-        private GridView gvTasks;
-        private GridControl gcEmployees;
-        private GridView gvEmployees;
-        
-        private LabelControl lblTotalTasks;
-        private LabelControl lblPendingTasks;
-        private LabelControl lblInProgressTasks;
-        private LabelControl lblCompletedTasks;
-        private LabelControl lblOverdueTasks;
-        
-        private SimpleButton btnRefresh;
-        private SimpleButton btnCreateTask;
-        private SimpleButton btnAIRecommend;
-        
-        private TextEdit txtTaskTitle;
-        private ComboBoxEdit cmbPriority;
-        private ComboBoxEdit cmbDepartment;
+        private readonly DatabaseService _db;
+        private readonly AIService _ai;
+        private LayoutControl lc;
+        private GridControl gcTasks, gcEmployees;
+        private GridView gvTasks, gvEmployees;
         private ListBoxControl lstAnomalies;
-        
-        private LayoutControl layoutControl;
+        private LabelControl[] statCards = new LabelControl[4];
 
-        public ManagerDashboard(DatabaseService databaseService, AIService aiService, NotificationService notificationService)
+        public ManagerDashboard(DatabaseService db, AIService ai, NotificationService ns)
         {
-            _databaseService = databaseService;
-            _aiService = aiService;
-            _notificationService = notificationService;
+            _db = db; _ai = ai;
             InitializeComponent();
-            SetupDevExpressUI();
-            this.Load += ManagerDashboard_Load;
+            SetupDashboardLayout();
+            this.Shown += async (s, e) => await LoadDataSafe();
         }
 
-        private void ManagerDashboard_Load(object sender, EventArgs e)
+        private void SetupDashboardLayout()
         {
-            LoadData();
-        }
-
-        private void SetupDevExpressUI()
-        {
-            this.Text = "Yönetici Kontrol Paneli";
+            this.Text = "Yönetici Stratejik Karar Destek Paneli";
             this.WindowState = FormWindowState.Maximized;
 
-            // Create toolbar panel first
-            var toolbarPanel = new DevExpress.XtraEditors.PanelControl
-            {
-                Height = 60,
-                Dock = DockStyle.Top,
-                BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder
-            };
+            // Eğer formun içinde önceden kalma bir layoutControl varsa siliyoruz (Zorlayıcı çözüm)
+            var oldLc = this.Controls.OfType<LayoutControl>().FirstOrDefault();
+            if (oldLc != null) this.Controls.Remove(oldLc);
 
-            // Buttons
-            btnRefresh = new SimpleButton { Text = "Yenile", ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("actions_refresh.svg") } };
-            btnCreateTask = new SimpleButton { Text = "Yeni Görev", ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("actions_add.svg") } };
-            btnAIRecommend = new SimpleButton { Text = "AI Öneri", ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("outlook%20inspired/pivottable.svg") } };
+            lc = new LayoutControl { Dock = DockStyle.Fill, Name = "mainLC" };
+            this.Controls.Add(lc);
+            lc.BeginUpdate();
 
-            btnRefresh.Size = new Size(100, 40);
-            btnRefresh.Location = new Point(10, 10);
-            
-            btnCreateTask.Size = new Size(120, 40);
-            btnCreateTask.Location = new Point(120, 10);
-            
-            btnAIRecommend.Size = new Size(120, 40);
-            btnAIRecommend.Location = new Point(250, 10);
-
-            toolbarPanel.Controls.Add(btnRefresh);
-            toolbarPanel.Controls.Add(btnCreateTask);
-            toolbarPanel.Controls.Add(btnAIRecommend);
-
-            this.Controls.Add(toolbarPanel);
-
-            // Create main layout control
-            layoutControl = new LayoutControl { Dock = DockStyle.Fill };
-            this.Controls.Add(layoutControl);
-
-            // Grids
-            gcTasks = new GridControl { Name = "gcTasks", MinimumSize = new Size(200, 200) };
-            gvTasks = new GridView(gcTasks) { Name = "gvTasks" };
-            gcTasks.MainView = gvTasks;
-            gvTasks.OptionsView.ShowGroupPanel = false;
-            gvTasks.OptionsBehavior.Editable = false;
-
-            gcEmployees = new GridControl { Name = "gcEmployees", MinimumSize = new Size(200, 200) };
-            gvEmployees = new GridView(gcEmployees) { Name = "gvEmployees" };
-            gcEmployees.MainView = gvEmployees;
-            gvEmployees.OptionsView.ShowGroupPanel = false;
-            gvEmployees.OptionsBehavior.Editable = false;
-
-            // Stats Labels
-            lblTotalTasks = CreateStatLabel("Toplam Görev: 0", true);
-            lblPendingTasks = CreateStatLabel("Bekleyen: 0");
-            lblInProgressTasks = CreateStatLabel("Devam Eden: 0");
-            lblCompletedTasks = CreateStatLabel("Tamamlanan: 0");
-            lblOverdueTasks = CreateStatLabel("Gecikmiş: 0");
-
-            // Inputs
-            txtTaskTitle = new TextEdit { Properties = { NullValuePrompt = "Görev Başlığı..." } };
-            cmbPriority = new ComboBoxEdit();
-            cmbPriority.Properties.Items.AddRange(new[] { "Düşük", "Normal", "Yüksek", "Kritik" });
-            cmbDepartment = new ComboBoxEdit();
-            var btnSaveTask = new SimpleButton { Text = "Hızlı Kaydet", Appearance = { Font = new Font("Segoe UI", 9, FontStyle.Bold) } };
-
-            lstAnomalies = new ListBoxControl { MinimumSize = new Size(200, 200) };
-
-            // Create 4 separate PanelControls for each section
-            var panelTasks = new DevExpress.XtraEditors.PanelControl
-            {
-                Dock = DockStyle.Fill,
-                MinimumSize = new Size(300, 250)
-            };
-            var lblTasksHeader = new LabelControl
-            {
-                Text = "📋 GÖREV LİSTESİ",
-                Dock = DockStyle.Top,
-                Appearance = { Font = new Font("Segoe UI", 11, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Near } },
-                Padding = new Padding(5),
-                Height = 30
-            };
-            gcTasks.Dock = DockStyle.Fill;
-            panelTasks.Controls.Add(gcTasks);
-            panelTasks.Controls.Add(lblTasksHeader);
-
-            var panelEmployees = new DevExpress.XtraEditors.PanelControl
-            {
-                Dock = DockStyle.Fill,
-                MinimumSize = new Size(200, 250)
-            };
-            var lblEmployeesHeader = new LabelControl
-            {
-                Text = "👥 ÇALIŞAN İŞ YÜKÜ",
-                Dock = DockStyle.Top,
-                Appearance = { Font = new Font("Segoe UI", 11, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Near } },
-                Padding = new Padding(5),
-                Height = 30
-            };
-            gcEmployees.Dock = DockStyle.Fill;
-            panelEmployees.Controls.Add(gcEmployees);
-            panelEmployees.Controls.Add(lblEmployeesHeader);
-
-            var panelAnomalies = new DevExpress.XtraEditors.PanelControl
-            {
-                Dock = DockStyle.Fill,
-                MinimumSize = new Size(300, 250)
-            };
-            var lblAnomaliesHeader = new LabelControl
-            {
-                Text = "⚠️ ANOMALİ TESPİTLERİ",
-                Dock = DockStyle.Top,
-                Appearance = { Font = new Font("Segoe UI", 11, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Near } },
-                Padding = new Padding(5),
-                Height = 30
-            };
-            lstAnomalies.Dock = DockStyle.Fill;
-            panelAnomalies.Controls.Add(lstAnomalies);
-            panelAnomalies.Controls.Add(lblAnomaliesHeader);
-
-            var panelStats = new DevExpress.XtraEditors.PanelControl
-            {
-                Dock = DockStyle.Fill,
-                MinimumSize = new Size(200, 250)
-            };
-            var lblStatsHeader = new LabelControl
-            {
-                Text = "📊 İSTATİSTİKLER & HIZLI EKLE",
-                Dock = DockStyle.Top,
-                Appearance = { Font = new Font("Segoe UI", 11, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Near } },
-                Padding = new Padding(5),
-                Height = 30
-            };
-
-            // Stats section - stack labels vertically
-            lblTotalTasks.Dock = DockStyle.Top;
-            lblPendingTasks.Dock = DockStyle.Top;
-            lblInProgressTasks.Dock = DockStyle.Top;
-            lblCompletedTasks.Dock = DockStyle.Top;
-            lblOverdueTasks.Dock = DockStyle.Top;
-            
-            var statsContainer = new DevExpress.XtraEditors.PanelControl
-            {
-                Dock = DockStyle.Top,
-                Height = 150,
-                BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder
-            };
-            statsContainer.Controls.Add(lblOverdueTasks);
-            statsContainer.Controls.Add(lblCompletedTasks);
-            statsContainer.Controls.Add(lblInProgressTasks);
-            statsContainer.Controls.Add(lblPendingTasks);
-            statsContainer.Controls.Add(lblTotalTasks);
-
-            // Quick add section
-            var lblQuickAdd = new LabelControl
-            {
-                Text = "HIZLI GÖREV EKLE",
-                Dock = DockStyle.Top,
-                Appearance = { Font = new Font("Segoe UI", 9, FontStyle.Bold) },
-                Padding = new Padding(5),
-                Height = 25
-            };
-            
-            var lblTitle = new LabelControl { Text = "Başlık:", Dock = DockStyle.Top, Height = 20, Padding = new Padding(5, 5, 0, 0) };
-            txtTaskTitle.Dock = DockStyle.Top;
-            var lblPriority = new LabelControl { Text = "Öncelik:", Dock = DockStyle.Top, Height = 20, Padding = new Padding(5, 5, 0, 0) };
-            cmbPriority.Dock = DockStyle.Top;
-            btnSaveTask.Dock = DockStyle.Top;
-            btnSaveTask.Height = 30;
-
-            var quickAddContainer = new DevExpress.XtraEditors.PanelControl
-            {
-                Dock = DockStyle.Fill,
-                BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder
-            };
-            quickAddContainer.Controls.Add(btnSaveTask);
-            quickAddContainer.Controls.Add(cmbPriority);
-            quickAddContainer.Controls.Add(lblPriority);
-            quickAddContainer.Controls.Add(txtTaskTitle);
-            quickAddContainer.Controls.Add(lblTitle);
-            quickAddContainer.Controls.Add(lblQuickAdd);
-
-            panelStats.Controls.Add(quickAddContainer);
-            panelStats.Controls.Add(statsContainer);
-            panelStats.Controls.Add(lblStatsHeader);
-
-            // Setup LayoutControl with proper structure
-            var root = layoutControl.Root;
+            var root = lc.Root;
             root.GroupBordersVisible = false;
             root.Padding = new DevExpress.XtraLayout.Utils.Padding(10);
+            root.Spacing = new DevExpress.XtraLayout.Utils.Padding(0);
 
-            // Create content group with table layout
-            var contentGroup = root.AddGroup();
-            contentGroup.LayoutMode = DevExpress.XtraLayout.Utils.LayoutMode.Table;
-            contentGroup.GroupBordersVisible = false;
-            
-            contentGroup.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 65 });
-            contentGroup.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 35 });
-            contentGroup.OptionsTableLayoutGroup.RowDefinitions.Add(new RowDefinition { SizeType = SizeType.Percent, Height = 50 });
-            contentGroup.OptionsTableLayoutGroup.RowDefinitions.Add(new RowDefinition { SizeType = SizeType.Percent, Height = 50 });
+            // --- 1. TOOLBAR ---
+            var btnRefresh = CreateBtn("Verileri Yenile", "actions_refresh.svg");
+            var btnNew = CreateBtn("Yeni Görev Tanımla", "actions_add.svg");
+            var btnAI = CreateBtn("AI Görev Öneri", "outlook%20inspired/pivottable.svg");
 
-            // Add panels as LayoutControlItems
-            var itemTasks = new LayoutControlItem(layoutControl, panelTasks);
-            itemTasks.TextVisible = false;
-            itemTasks.OptionsTableLayoutItem.RowIndex = 0;
-            itemTasks.OptionsTableLayoutItem.ColumnIndex = 0;
-            contentGroup.AddItem(itemTasks);
+            var groupButtons = root.AddGroup();
+            groupButtons.LayoutMode = DevExpress.XtraLayout.Utils.LayoutMode.Flow;
+            groupButtons.GroupBordersVisible = false;
+            groupButtons.AddItem("", btnRefresh);
+            groupButtons.AddItem("", btnNew);
+            groupButtons.AddItem("", btnAI);
 
-            var itemEmployees = new LayoutControlItem(layoutControl, panelEmployees);
-            itemEmployees.TextVisible = false;
-            itemEmployees.OptionsTableLayoutItem.RowIndex = 0;
-            itemEmployees.OptionsTableLayoutItem.ColumnIndex = 1;
-            contentGroup.AddItem(itemEmployees);
+            // --- 2. KPI KARTLARI ---
+            var groupStats = root.AddGroup();
+            groupStats.LayoutMode = DevExpress.XtraLayout.Utils.LayoutMode.Table;
+            groupStats.GroupBordersVisible = false;
 
-            var itemAnomalies = new LayoutControlItem(layoutControl, panelAnomalies);
-            itemAnomalies.TextVisible = false;
-            itemAnomalies.OptionsTableLayoutItem.RowIndex = 1;
-            itemAnomalies.OptionsTableLayoutItem.ColumnIndex = 0;
-            contentGroup.AddItem(itemAnomalies);
-
-            var itemStats = new LayoutControlItem(layoutControl, panelStats);
-            itemStats.TextVisible = false;
-            itemStats.OptionsTableLayoutItem.RowIndex = 1;
-            itemStats.OptionsTableLayoutItem.ColumnIndex = 1;
-            contentGroup.AddItem(itemStats);
-
-            // Events
-            btnRefresh.Click += BtnRefresh_Click;
-            btnCreateTask.Click += BtnCreateTask_Click;
-            btnAIRecommend.Click += BtnAIRecommend_Click;
-            btnSaveTask.Click += BtnSaveTask_Click;
-            gvTasks.DoubleClick += GvTasks_DoubleClick;
-            gvEmployees.RowStyle += GvEmployees_RowStyle;
-        }
-
-        private LabelControl CreateStatLabel(string text, bool isHeader = false)
-        {
-            return new LabelControl
+            for (int i = 0; i < 4; i++)
             {
-                Text = text,
-                Appearance = { 
-                    Font = new Font("Segoe UI", isHeader ? 12 : 10, isHeader ? FontStyle.Bold : FontStyle.Regular),
-                    ForeColor = isHeader ? Color.FromArgb(0, 120, 215) : Color.FromArgb(60, 60, 60)
-                },
-                Padding = new Padding(5)
+                groupStats.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 25 });
+                statCards[i] = new LabelControl
+                {
+                    AllowHtmlString = true,
+                    AutoSizeMode = LabelAutoSizeMode.None,
+                    BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.HotFlat,
+                    Appearance = { TextOptions = { HAlignment = HorzAlignment.Center, VAlignment = VertAlignment.Center }, Font = new Font("Segoe UI Semibold", 20) }
+                };
+
+                LayoutControlItem item = groupStats.AddItem("", statCards[i]);
+                item.TextVisible = false;
+                item.OptionsTableLayoutItem.ColumnIndex = i;
+
+                // Kart yüksekliğini ZORLA sabitliyoruz
+                item.SizeConstraintsType = SizeConstraintsType.Custom;
+                item.MinSize = new Size(100, 110);
+                item.MaxSize = new Size(0, 110);
+            }
+
+            // --- 3. ANA İÇERİK (Hücre Başına Yayılma Garantili) ---
+            var mainContentGroup = root.AddGroup();
+            mainContentGroup.GroupBordersVisible = false;
+            mainContentGroup.LayoutMode = DevExpress.XtraLayout.Utils.LayoutMode.Table;
+
+            mainContentGroup.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 60 });
+            mainContentGroup.OptionsTableLayoutGroup.ColumnDefinitions.Add(new ColumnDefinition { SizeType = SizeType.Percent, Width = 40 });
+
+            // Tablo satırını %80 yaparak yukarı çekiyoruz
+            mainContentGroup.OptionsTableLayoutGroup.RowDefinitions.Add(new RowDefinition { SizeType = SizeType.Percent, Height = 80 });
+            mainContentGroup.OptionsTableLayoutGroup.RowDefinitions.Add(new RowDefinition { SizeType = SizeType.Percent, Height = 20 });
+
+            gcTasks = CreateGrid(); gvTasks = (GridView)gcTasks.MainView;
+            gcEmployees = CreateGrid(); gvEmployees = (GridView)gcEmployees.MainView;
+            lstAnomalies = new ListBoxControl { Appearance = { Font = new Font("Segoe UI", 12) }, ItemHeight = 35 };
+
+            // ZORLAYICI YERLEŞTİRME
+            AddControlForce(mainContentGroup, "📋 AKTİF GÖREV LİSTESİ", gcTasks, 0, 0);
+            AddControlForce(mainContentGroup, "👥 EKİP İŞ YÜKÜ ANALİZİ", gcEmployees, 1, 0);
+            AddControlForce(mainContentGroup, "⚠️ SİSTEM ANOMALİLERİ", lstAnomalies, 0, 1, 2, 1);
+
+            lc.EndUpdate();
+
+            // Click Events
+            btnRefresh.Click += async (s, e) => await LoadDataSafe();
+            btnNew.Click += async (s, e) => {
+                var f = new CreateTaskForm(_db, _ai);
+                if (f.ShowDialog() == DialogResult.OK) await LoadDataSafe();
             };
+            btnAI.Click += async (s, e) => await RunAITaskRecommendation();
         }
 
-        private void InitializeComponent()
+        private void AddControlForce(LayoutControlGroup g, string title, Control c, int col, int row, int cs = 1, int rs = 1)
         {
-            this.SuspendLayout();
-            this.Name = "ManagerDashboard";
-            this.ResumeLayout(false);
-        }
+            var grp = g.AddGroup(title);
+            grp.OptionsTableLayoutItem.ColumnIndex = col;
+            grp.OptionsTableLayoutItem.RowIndex = row;
+            grp.OptionsTableLayoutItem.ColumnSpan = cs;
+            grp.OptionsTableLayoutItem.RowSpan = rs;
+            grp.Padding = new DevExpress.XtraLayout.Utils.Padding(2);
 
-        private async void LoadData()
-        {
-            try
-            {
-                var employees = await _databaseService.GetEmployeesAsync();
-                var employeeLookup = employees.ToDictionary(e => e.Id, e => e.FullName);
+            var item = grp.AddItem("", c);
+            item.TextVisible = false;
 
-                var tasks = await _databaseService.GetTasksAsync();
-                var taskList = tasks.Select(t => new
-                {
-                    t.Id,
-                    Başlık = t.Title,
-                    Durum = t.Status.ToString(),
-                    Öncelik = t.Priority.ToString(),
-                    Teslim = t.DueDate?.ToString("dd.MM.yyyy") ?? "-",
-                    Atanan = (t.AssignedToId > 0 && employeeLookup.ContainsKey(t.AssignedToId)) ? employeeLookup[t.AssignedToId] : "-"
-                }).ToList();
-                
-                gcTasks.DataSource = taskList;
-                gcTasks.RefreshDataSource();
+            // KRİTİK: Kontrolün tüm dikey boşluğu doldurmasını sağlayan tek ayar
+            item.SizeConstraintsType = SizeConstraintsType.Default;
+            c.Dock = DockStyle.Fill;
+            c.MinimumSize = new Size(100, 300); // Küçük kalmasını kesin olarak engeller
+        }
 
-                var employeeList = employees.Select(e => new
-                {
-                    e.Id,
-                    Ad = e.FullName,
-                    İşYükü = $"{e.CurrentWorkload}/{e.MaxWorkload}",
-                    Yüzde = e.WorkloadPercentage
-                }).ToList();
-                
-                gcEmployees.DataSource = employeeList;
-                gcEmployees.RefreshDataSource();
-
-                await LoadAnomalies();
-
-                var stats = await _databaseService.GetTaskStatisticsAsync();
-                if (stats != null)
-                {
-                    lblTotalTasks.Text = $"Toplam Görev: {stats["Total"]}";
-                    lblPendingTasks.Text = $"Bekleyen: {stats["Pending"]}";
-                    lblInProgressTasks.Text = $"Devam Eden: {stats["InProgress"]}";
-                    lblCompletedTasks.Text = $"Tamamlanan: {stats["Completed"]}";
-                    lblOverdueTasks.Text = $"Gecikmiş: {stats["Overdue"]}";
-                }
-                
-                layoutControl.PerformLayout();
-            }
-            catch (Exception ex)
-            {
-                XtraMessageBox.Show($"Veri yüklenirken hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private async System.Threading.Tasks.Task LoadAnomalies()
+        private async System.Threading.Tasks.Task LoadDataSafe()
         {
             try
             {
-                var anomalies = await _aiService.DetectAnomaliesAsync();
-                lstAnomalies.Items.Clear();
-                foreach (var anomaly in anomalies)
-                {
-                    var taskPrefix = anomaly.Task != null && !string.IsNullOrWhiteSpace(anomaly.Task.Title)
-                        ? $"Görev: {anomaly.Task.Title} - "
-                        : string.Empty;
+                var tasks = await _db.GetTasksAsync();
+                var employees = await _db.GetEmployeesAsync();
+                var stats = await _db.GetTaskStatisticsAsync();
 
-                    lstAnomalies.Items.Add($"[{anomaly.Severity}] {taskPrefix}{anomaly.Message}");
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"LoadAnomalies Error: {ex.Message}");
-            }
-        }
+                this.Invoke(new MethodInvoker(() => {
+                    gcTasks.DataSource = tasks.Select(t => new { ID = t.Id, BAŞLIK = t.Title, DURUM = t.Status, TERMİN = t.DueDate?.ToShortDateString() }).ToList();
+                    gcEmployees.DataSource = employees.Select(e => new { ÇALIŞAN = e.FullName, DOLULUK = $"%{e.WorkloadPercentage}" }).ToList();
 
-        private void GvEmployees_RowStyle(object sender, RowStyleEventArgs e)
-        {
-            if (e.RowHandle >= 0)
-            {
-                var percentage = (double)gvEmployees.GetRowCellValue(e.RowHandle, "Yüzde");
-                if (percentage > 80) e.Appearance.BackColor = Color.MistyRose;
-                else if (percentage > 60) e.Appearance.BackColor = Color.OldLace;
-                else e.Appearance.BackColor = Color.Honeydew;
-            }
-        }
-
-        private void BtnRefresh_Click(object sender, EventArgs e)
-        {
-            LoadData();
-        }
-
-        private void BtnCreateTask_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                var createForm = new CreateTaskForm(_databaseService, _aiService);
-                if (createForm.ShowDialog() == DialogResult.OK)
-                {
-                    LoadData();
-                }
-            }
-            catch (Exception ex)
-            {
-                XtraMessageBox.Show($"Görev oluşturma formu açılırken hata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private async void BtnAIRecommend_Click(object sender, EventArgs e)
-        {
-            if (gvTasks.FocusedRowHandle < 0)
-            {
-                XtraMessageBox.Show("Lütfen bir görev seçin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var taskId = (int)gvTasks.GetFocusedRowCellValue("Id");
-            var tasks = await _databaseService.GetTasksAsync();
-            var task = tasks.FirstOrDefault(t => t.Id == taskId);
-
-            if (task == null) return;
-
-            var recommendation = await _aiService.RecommendEmployeeForTaskAsync(task);
-            if (recommendation != null && recommendation.RecommendedEmployee != null)
-            {
-                var message = $"Önerilen: {recommendation.RecommendedEmployee.FullName}\n\n{recommendation.Reason}\n\nBu çalışanı göreve atamak ister misiniz?";
-                if (XtraMessageBox.Show(message, "AI Önerisi", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                {
-                    var previousId = task.AssignedToId;
-                    task.AssignedToId = recommendation.RecommendedEmployee.Id;
-                    if (await _databaseService.UpdateTaskAsync(task, previousId))
+                    if (stats != null)
                     {
-                        XtraMessageBox.Show("Görev AI önerisine göre güncellendi.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        LoadData();
+                        UpdateCard(0, stats["Total"], "TOPLAM GÖREV", "#2b579a");
+                        UpdateCard(1, stats["Pending"], "BEKLEYEN", "#d83b01");
+                        UpdateCard(2, stats["Overdue"], "GECİKMİŞ", "#a4262c");
+                        UpdateCard(3, stats["Completed"], "TAMAMLANAN", "#107c10");
                     }
+                    gvTasks.BestFitColumns(); gvEmployees.BestFitColumns();
+                }));
+
+                var anomalies = await _ai.DetectAnomaliesAsync();
+                this.Invoke(new MethodInvoker(() => {
+                    lstAnomalies.Items.Clear();
+                    foreach (var a in anomalies) lstAnomalies.Items.Add($"[{a.Severity}] {(a.Task != null ? a.Task.Title : "Sistem")}: {a.Message}");
+                }));
+            }
+            catch (Exception ex) { XtraMessageBox.Show("Veri hatası: " + ex.Message); }
+        }
+
+        private async System.Threading.Tasks.Task RunAITaskRecommendation()
+        {
+            if (gvTasks.FocusedRowHandle < 0) return;
+            var row = gvTasks.GetFocusedRow();
+            int taskId = (int)((dynamic)row).ID;
+
+            var all = await _db.GetTasksAsync();
+            var task = all.FirstOrDefault(t => t.Id == taskId);
+            var rec = await _ai.RecommendEmployeeForTaskAsync(task);
+
+            if (rec != null)
+            {
+                string msg = $"<b>ÖNERİ:</b> {rec.RecommendedEmployee.FullName}<br><b>NEDEN:</b> {rec.Reason}";
+                if (XtraMessageBox.Show(msg, "AI Önerisi", MessageBoxButtons.YesNo, MessageBoxIcon.Question, DefaultBoolean.True) == DialogResult.Yes)
+                {
+                    task.AssignedToId = rec.RecommendedEmployee.Id;
+                    await _db.UpdateTaskAsync(task, 0);
+                    await LoadDataSafe();
                 }
             }
         }
 
-        private async void BtnSaveTask_Click(object sender, EventArgs e)
+        private GridControl CreateGrid()
         {
-            if (string.IsNullOrWhiteSpace(txtTaskTitle.Text))
-            {
-                XtraMessageBox.Show("Görev başlığı gerekli.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var task = new TaskModel
-            {
-                Title = txtTaskTitle.Text,
-                Priority = (TaskPriority)cmbPriority.SelectedIndex,
-                DepartmentId = 1, // Default
-                CreatedDate = DateTime.Now,
-                Status = TaskStatus.Pending
-            };
-
-            await _databaseService.CreateTaskAsync(task);
-            XtraMessageBox.Show("Görev oluşturuldu.", "Başarılı", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            LoadData();
+            var gc = new GridControl { Dock = DockStyle.Fill };
+            var gv = new GridView(gc);
+            gc.MainView = gv;
+            gv.OptionsView.ShowGroupPanel = false;
+            gv.OptionsBehavior.Editable = false;
+            gv.Appearance.HeaderPanel.Font = new Font("Segoe UI", 11, FontStyle.Bold);
+            gv.Appearance.Row.Font = new Font("Segoe UI", 11);
+            return gc;
         }
 
-        private void GvTasks_DoubleClick(object sender, EventArgs e)
+        private void UpdateCard(int idx, object val, string title, string color) =>
+          statCards[idx].Text = $"<color={color}><b>{val}</b></color><br><size=11>{title}</size>";
+
+        private SimpleButton CreateBtn(string t, string i) => new SimpleButton
         {
-            if (gvTasks.FocusedRowHandle >= 0)
-            {
-                var taskId = (int)gvTasks.GetFocusedRowCellValue("Id");
-                var detailForm = new TaskDetailForm(_databaseService, taskId);
-                detailForm.ShowDialog();
-                LoadData();
-            }
-        }
+            Text = t,
+            ImageOptions = { SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage(i), SvgImageSize = new Size(24, 24) },
+            Appearance = { Font = new Font("Segoe UI Semibold", 11) },
+            AutoWidthInLayoutControl = true,
+            Padding = new Padding(15, 8, 15, 8)
+        };
+
+        private void InitializeComponent() { this.SuspendLayout(); this.Name = "ManagerDashboard"; this.Size = new Size(1366, 768); this.ResumeLayout(false); }
     }
 }
+

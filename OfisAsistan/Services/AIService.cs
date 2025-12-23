@@ -4,404 +4,292 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
-using TaskModel = OfisAsistan.Models.Task;
-using TaskStatusModel = OfisAsistan.Models.TaskStatus;
 using Newtonsoft.Json;
 using OfisAsistan.Models;
+
+// Alias Tanımları
+using AppTask = OfisAsistan.Models.Task;
+using TaskStatusEnum = OfisAsistan.Models.TaskStatus;
 
 namespace OfisAsistan.Services
 {
     public class AIService
     {
         private readonly string _apiKey;
-        private readonly string _apiUrl;
+        private readonly string _baseApiUrl;
         private readonly HttpClient _httpClient;
         private readonly DatabaseService _databaseService;
 
         public AIService(string apiKey, string apiUrl, DatabaseService databaseService)
         {
             _apiKey = apiKey;
-            _apiUrl = apiUrl; // OpenAI veya Gemini API URL
+            _baseApiUrl = apiUrl?.TrimEnd('/');
             _httpClient = new HttpClient();
+            // Analiz işlemleri uzun sürebilir, süreyi artırdık
+            _httpClient.Timeout = TimeSpan.FromSeconds(60);
             _databaseService = databaseService;
         }
 
-        // Sesli komuttan görev oluşturma
-        public async System.Threading.Tasks.Task<TaskModel> ParseVoiceCommandToTaskAsync(string voiceCommand)
+        // =================================================================================
+        // MERKEZİ AI MOTORU (Groq Llama-3.3)
+        // =================================================================================
+        private async System.Threading.Tasks.Task<string> CallAIAsync(string systemPrompt, string userPrompt, bool requireJson = false)
         {
             try
             {
-                var prompt = $@"Aşağıdaki sesli komutu analiz et ve JSON formatında görev bilgilerini çıkar:
-Komut: {voiceCommand}
-
-Çıkarılacak bilgiler:
-- title: Görev başlığı
-- description: Görev açıklaması
-- assignedToName: Atanacak kişinin adı (varsa)
-- dueDate: Son teslim tarihi (format: yyyy-MM-dd, yoksa null)
-- priority: Öncelik (Low, Normal, High, Critical)
-- department: Departman adı (varsa)
-
-Sadece JSON döndür, başka açıklama yapma.";
-
-                var response = await CallAIAsync(prompt);
-                var taskData = JsonConvert.DeserializeObject<Dictionary<string, object>>(response);
-
-                // Employee ID bul
-                int assignedToId = 0;
-                if (taskData.ContainsKey("assignedToName"))
+                var requestBody = new
                 {
-                    var employees = await _databaseService.GetEmployeesAsync();
-                    var assignedName = taskData["assignedToName"].ToString().ToLower();
-                    var employee = employees.FirstOrDefault(e => 
-                        e.FirstName.ToLower().Contains(assignedName) ||
-                        e.LastName.ToLower().Contains(assignedName));
-                    if (employee != null)
-                        assignedToId = employee.Id;
-                }
-
-                // Department ID bul
-                int departmentId = 1; // Default
-                if (taskData.ContainsKey("department"))
-                {
-                    var departments = await _databaseService.GetDepartmentsAsync();
-                    var deptName = taskData["department"].ToString().ToLower();
-                    var dept = departments.FirstOrDefault(d => 
-                        d.Name.ToLower().Contains(deptName));
-                    if (dept != null)
-                        departmentId = dept.Id;
-                }
-
-                // Priority parse
-                TaskPriority priority = TaskPriority.Normal;
-                if (taskData.ContainsKey("priority"))
-                {
-                    Enum.TryParse<TaskPriority>(taskData["priority"].ToString(), out priority);
-                }
-
-                // Due date parse
-                DateTime? dueDate = null;
-                if (taskData.ContainsKey("dueDate") && taskData["dueDate"] != null)
-                {
-                    if (DateTime.TryParse(taskData["dueDate"].ToString(), out DateTime parsedDate))
-                        dueDate = parsedDate;
-                }
-
-                return new TaskModel
-                {
-                    Title = taskData.ContainsKey("title") ? taskData["title"].ToString() : "Yeni Görev",
-                    Description = taskData.ContainsKey("description") ? taskData["description"].ToString() : voiceCommand,
-                    AssignedToId = assignedToId,
-                    CreatedDate = DateTime.Now,
-                    DueDate = dueDate,
-                    Priority = priority,
-                    DepartmentId = departmentId,
-                    Status = TaskStatusModel.Pending
+                    model = "llama-3.3-70b-versatile", // En güçlü model
+                    messages = new[]
+                    {
+                        new { role = "system", content = systemPrompt },
+                        new { role = "user", content = userPrompt }
+                    },
+                    temperature = requireJson ? 0.2 : 0.7, // JSON istiyorsak yaratıcılığı kısıyoruz
+                    response_format = requireJson ? new { type = "json_object" } : null
                 };
+
+                var jsonContent = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+                _httpClient.DefaultRequestHeaders.Clear();
+                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+
+                // URL Düzeltme
+                string finalUrl = _baseApiUrl;
+                if (finalUrl.Contains("api.groq.com") && !finalUrl.Contains("/v1"))
+                {
+                    if (finalUrl.EndsWith("/openai")) finalUrl += "/v1";
+                    else if (!finalUrl.Contains("/openai")) finalUrl += "/openai/v1";
+                }
+                if (!finalUrl.EndsWith("/chat/completions")) finalUrl = finalUrl.TrimEnd('/') + "/chat/completions";
+
+                var response = await _httpClient.PostAsync(finalUrl, content);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var err = await response.Content.ReadAsStringAsync();
+                    System.Diagnostics.Debug.WriteLine($"[AI HATA] {response.StatusCode}: {err}");
+                    return null;
+                }
+
+                var responseJson = await response.Content.ReadAsStringAsync();
+                dynamic result = JsonConvert.DeserializeObject(responseJson);
+                string aiText = result?.choices?[0]?.message?.content;
+
+                return requireJson ? CleanJson(aiText) : aiText;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"ParseVoiceCommandToTaskAsync Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AI EXCEPTION] {ex.Message}");
                 return null;
             }
         }
 
-        // AI destekli personel atama önerisi
-        public async System.Threading.Tasks.Task<EmployeeRecommendation> RecommendEmployeeForTaskAsync(TaskModel task)
+        private string CleanJson(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            text = text.Replace("```json", "").Replace("```", "").Trim();
+            int start = text.IndexOf('{');
+            int end = text.LastIndexOf('}');
+
+            if (start == -1 || end == -1)
+            {
+                // Array kontrolü
+                start = text.IndexOf('[');
+                end = text.LastIndexOf(']');
+            }
+
+            if (start > -1 && end > start) return text.Substring(start, end - start + 1);
+            return text;
+        }
+
+        // =================================================================================
+        // 1. ZEKİ PERSONEL ÖNERİSİ
+        // =================================================================================
+        public async System.Threading.Tasks.Task<EmployeeRecommendation> RecommendEmployeeForTaskAsync(AppTask task)
         {
             try
             {
                 var employees = await _databaseService.GetEmployeesAsync();
-                var tasks = await _databaseService.GetTasksAsync();
 
-                var prompt = $@"Aşağıdaki görev için en uygun çalışanı öner:
-Görev: {task.Title}
-Açıklama: {task.Description}
-Gerekli Yetenekler: {task.SkillsRequired}
-Öncelik: {task.Priority}
-Tahmini Süre: {task.EstimatedHours} saat
+                // DÜZELTME: e.Role yerine e.Position kullanıldı
+                var empList = string.Join("\n", employees.Select(e =>
+                    $"- ID: {e.Id} | İsim: {e.FullName} | Pozisyon: {e.Position ?? "Belirtilmemiş"} | Yetenekler: {e.Skills} | İş Yükü: %{e.WorkloadPercentage:F1}"
+                ));
 
-Çalışanlar:
-{string.Join("\n", employees.Select(e => $"- {e.FullName} (Yetenekler: {e.Skills}, Mevcut İş Yükü: {e.CurrentWorkload}/{e.MaxWorkload} saat)"))}
+                string systemPrompt = "Sen uzman bir İnsan Kaynakları yöneticisisin. Görev gereksinimlerini çalışanların yetenekleri ve pozisyonlarıyla eşleştirirsin.";
 
-Mevcut Görevler:
-{string.Join("\n", tasks.Where(t => t.Status != TaskStatusModel.Completed).Select(t => $"- {t.Title} ({t.AssignedToId})"))}
+                string userPrompt = $@"
+                GÖREV:
+                Başlık: {task.Title}
+                Açıklama: {task.Description}
+                Gereken Öncelik: {task.Priority}
 
-En uygun 3 çalışanı öncelik sırasına göre listele ve nedenlerini açıkla.";
+                ADAYLAR:
+                {empList}
 
-                var response = await CallAIAsync(prompt);
+                GÖREVİN:
+                1. Görevi analiz et ve hangi yeteneklerin gerektiğini belirle.
+                2. İş yükü %80'in üzerinde olanları ele (çok acil değilse).
+                3. Pozisyonu ve yeteneği en uygun olanı seç.
+                4. Asla 'ID yüksek diye' gibi saçma nedenler sunma. Mantıklı bir neden yaz.
                 
-                // Response'dan en uygun çalışanı bul
-                var bestMatch = employees
-                    .OrderByDescending(e => CalculateEmployeeScore(e, task, tasks))
-                    .FirstOrDefault();
+                JSON CEVAP FORMATI:
+                {{
+                    ""EmployeeId"": 123,
+                    ""Reason"": ""Ahmet Bey Backend Developer pozisyonunda ve C# yetkinliği bu görev için uygun.""
+                }}";
 
-                return new EmployeeRecommendation
-                {
-                    RecommendedEmployee = bestMatch,
-                    Score = bestMatch != null ? CalculateEmployeeScore(bestMatch, task, tasks) : 0,
-                    Reason = response,
-                    AlternativeEmployees = employees
-                        .OrderByDescending(e => CalculateEmployeeScore(e, task, tasks))
-                        .Take(3)
-                        .ToList()
-                };
+                var json = await CallAIAsync(systemPrompt, userPrompt, true);
+                if (string.IsNullOrEmpty(json)) return null;
+
+                dynamic result = JsonConvert.DeserializeObject(json);
+                int empId = (int)result.EmployeeId;
+                string reason = (string)result.Reason;
+
+                var bestEmp = employees.FirstOrDefault(e => e.Id == empId);
+                return bestEmp != null ? new EmployeeRecommendation { RecommendedEmployee = bestEmp, Reason = reason, Score = 95 } : null;
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"RecommendEmployeeForTaskAsync Error: {ex.Message}");
-                return null;
-            }
+            catch { return null; }
         }
 
-        // AI alt görev sihirbazı
-        public async System.Threading.Tasks.Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
-        {
-            try
-            {
-                var prompt = $@"Aşağıdaki büyük görevi mantıklı alt görevlere böl:
-Görev: {taskDescription}
-
-Her alt görev için:
-- title: Alt görev başlığı
-- description: Açıklama
-- estimatedHours: Tahmini süre (saat)
-- order: Sıralama (1, 2, 3...)
-
-JSON array formatında döndür, sadece JSON, başka açıklama yapma.";
-
-                var response = await CallAIAsync(prompt);
-                var subTasks = JsonConvert.DeserializeObject<List<SubTask>>(response);
-                return subTasks ?? new List<SubTask>();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync Error: {ex.Message}");
-                return new List<SubTask>();
-            }
-        }
-
-        // Anomali tespiti
+        // =================================================================================
+        // 2. GELİŞMİŞ ANOMALİ TESPİTİ
+        // =================================================================================
         public async System.Threading.Tasks.Task<List<AnomalyDetection>> DetectAnomaliesAsync()
         {
+            // Async uyarısını çözmek için kısa bekleme
+            await System.Threading.Tasks.Task.Delay(10);
+
             try
             {
+                // Verileri çek
                 var tasks = await _databaseService.GetTasksAsync();
-                var anomalies = new List<AnomalyDetection>();
-
-                foreach (var task in tasks.Where(t => t.Status != TaskStatusModel.Completed && t.DueDate.HasValue))
-                {
-                    var daysOverdue = (DateTime.Now - task.DueDate.Value).TotalDays;
-                    if (daysOverdue > 3)
-                    {
-                        anomalies.Add(new AnomalyDetection
-                        {
-                            Task = task,
-                            Type = AnomalyType.Overdue,
-                            Severity = daysOverdue > 7 ? AnomalySeverity.Critical : AnomalySeverity.High,
-                            Message = $"Bu görev {daysOverdue:F0} gün gecikmiş. Müdahale gerekli."
-                        });
-                    }
-                }
-
-                // Sürekli ertelenen görevler
                 var employees = await _databaseService.GetEmployeesAsync();
-                foreach (var employee in employees)
+
+                // Sadece aktif görevleri analiz et (AI kotası için sınırla: 15)
+                var activeTasks = tasks.Where(t => t.Status != TaskStatusEnum.Completed).Take(15).ToList();
+
+                if (!activeTasks.Any()) return new List<AnomalyDetection>();
+
+                // DÜZELTME: Role yerine Position kullanıldı
+                var tasksData = activeTasks.Select(t => new {
+                    t.Id,
+                    t.Title,
+                    t.Description,
+                    t.Priority,
+                    t.DueDate,
+                    AssignedTo = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.FullName ?? "Atanmamış",
+                    AssignedPosition = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.Position ?? "Yok"
+                });
+
+                string systemPrompt = "Sen bir Proje Denetçisisin. Görev listesindeki mantıksızlıkları ve riskleri tespit edersin.";
+
+                string userPrompt = $@"Aşağıdaki görev listesini analiz et.
+                
+                Veriler: {JsonConvert.SerializeObject(tasksData)}
+                Bugün: {DateTime.Now:yyyy-MM-dd}
+
+                ARANACAK HATALAR:
+                1. Teslim tarihi geçmiş görevler.
+                2. Pozisyonu 'Stajyer' veya 'Junior' olanlara 'Kritik' veya çok zor görev verilmesi.
+                3. Başlığı çok belirsiz görevler.
+
+                CEVAP FORMATI (JSON Array):
+                {{
+                    ""anomalies"": [
+                        {{ ""TaskId"": 1, ""Type"": ""Overdue"", ""Severity"": ""High"", ""Message"": ""Teslim tarihi geçmiş."" }}
+                    ]
+                }}
+                Hata yoksa boş dizi dön.";
+
+                var json = await CallAIAsync(systemPrompt, userPrompt, true);
+                if (string.IsNullOrEmpty(json)) return new List<AnomalyDetection>();
+
+                var anomalies = new List<AnomalyDetection>();
+                dynamic result = JsonConvert.DeserializeObject(json);
+
+                if (result.anomalies != null)
                 {
-                    var employeeTasks = tasks.Where(t => t.AssignedToId == employee.Id && t.Status == TaskStatusModel.Pending).ToList();
-                    if (employeeTasks.Count > 5 && employee.CurrentWorkload > employee.MaxWorkload * 0.8)
+                    foreach (var item in result.anomalies)
                     {
-                        anomalies.Add(new AnomalyDetection
+                        int tId = (int)item.TaskId;
+                        var originalTask = tasks.FirstOrDefault(t => t.Id == tId);
+                        if (originalTask != null)
                         {
-                            Task = null,
-                            Type = AnomalyType.WorkloadOverload,
-                            Severity = AnomalySeverity.Medium,
-                            Message = $"{employee.FullName} çok yoğun. İş yükü dağıtımı gerekli."
-                        });
+                            anomalies.Add(new AnomalyDetection
+                            {
+                                Task = originalTask,
+                                Message = (string)item.Message,
+                                Type = AnomalyType.QualityIssue, // Default
+                                Severity = AnomalySeverity.Medium // Default
+                            });
+                        }
                     }
                 }
-
                 return anomalies;
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"DetectAnomaliesAsync Error: {ex.Message}");
-                return new List<AnomalyDetection>();
-            }
+            catch { return new List<AnomalyDetection>(); }
         }
 
-        // Günlük brifing oluştur
+        // =================================================================================
+        // 3. GÜNLÜK BRİFİNG
+        // =================================================================================
         public async System.Threading.Tasks.Task<string> GenerateDailyBriefingAsync(int employeeId)
         {
             try
             {
                 var tasks = await _databaseService.GetTasksAsync(employeeId);
-                var meetings = await _databaseService.GetMeetingsAsync(employeeId, DateTime.Today);
-                var employee = await _databaseService.GetEmployeeAsync(employeeId);
+                var activeTasks = tasks.Where(t => t.Status != TaskStatusEnum.Completed).ToList();
 
-                var activeTasks = tasks.Where(t => t.Status != TaskStatusModel.Completed).ToList();
+                if (!activeTasks.Any()) return "Merhaba! Bugün için aktif bir göreviniz görünmüyor. Kendinizi geliştirmek için harika bir gün!";
 
-                // Hiç görev ve toplantı yoksa sabit brifing dön
-                if (!activeTasks.Any() && !meetings.Any())
-                {
-                    return $"Merhaba {employee?.FullName ?? ""}. Bugün için atanmış bir göreviniz veya toplantınız bulunmuyor. Günü planlamak, eğitim almak veya ekip arkadaşlarınıza destek olmak için güzel bir fırsat.";
-                }
+                var taskListText = string.Join("\n", activeTasks.Select(t => $"- {t.Title} (Öncelik: {t.Priority}, Teslim: {t.DueDate:dd.MM})"));
 
-                var tasksText = activeTasks.Any()
-                    ? string.Join("\n", activeTasks.Select(t => $"- {t.Title} (Öncelik: {t.Priority}, Teslim: {t.DueDate:dd.MM.yyyy})"))
-                    : "- Bugün için atanmış göreviniz yok.";
+                string systemPrompt = "Sen profesyonel bir kariyer koçusun. Türkçe konuşursun.";
+                string userPrompt = $@"Şu görevlere sahip çalışan için sabah brifingi hazırla:
+                {taskListText}
+                
+                Kurallar:
+                - Samimi ama profesyonel ol.
+                - Kritik görevleri vurgula.
+                - Maksimum 3 cümle olsun.
+                - Markdown kullanma.";
 
-                var meetingsText = meetings.Any()
-                    ? string.Join("\n", meetings.Select(m => $"- {m.Title} ({m.StartTime:HH:mm})"))
-                    : "- Bugün için toplantınız yok.";
-
-                var prompt = $@"{employee?.FullName} için günlük brifing oluştur:
-
-Bugünkü Görevler:
-{tasksText}
-
-Bugünkü Toplantılar:
-{meetingsText}
-
-Kısa, samimi ve motive edici bir brifing yaz. Türkçe.";
-
-                return await CallAIAsync(prompt);
+                var result = await CallAIAsync(systemPrompt, userPrompt, false);
+                return result ?? "Brifing servisine ulaşılamıyor.";
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"GenerateDailyBriefingAsync Error: {ex.Message}");
-                return "Günlük brifing oluşturulamadı.";
-            }
+            catch { return "Brifing hatası."; }
         }
 
-        // AI API çağrısı
-        private async System.Threading.Tasks.Task<string> CallAIAsync(string prompt)
+        // =================================================================================
+        // 4. GÖREV PARÇALAMA
+        // =================================================================================
+        public async System.Threading.Tasks.Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
         {
+            string systemPrompt = "Sen bir iş analistisin. Sadece JSON Array döndür.";
+            string userPrompt = $@"Görevi 3-5 alt adıma böl: '{taskDescription}'
+             Format: [{{ ""Title"": ""..."", ""Description"": ""..."", ""EstimatedHours"": 1 }}]";
+
+            var json = await CallAIAsync(systemPrompt, userPrompt, true);
+            if (string.IsNullOrEmpty(json)) return new List<SubTask>();
+
             try
             {
-                // OpenAI format
-                var requestBody = new
-                {
-                    model = "llama-3.1-8b-instant",
-                    messages = new[]
-                    {
-                        new { role = "system", content = "Sen bir ofis otomasyon asistanısın. Türkçe yanıt ver." },
-                        new { role = "user", content = prompt }
-                    },
-                    temperature = 0.7,
-                    max_tokens = 1000
-                };
-
-                var json = JsonConvert.SerializeObject(requestBody);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
-
-                var url = $"{_apiUrl}/v1/chat/completions";
-                System.Diagnostics.Debug.WriteLine($"CallAIAsync Request -> Url: {url}");
-
-                var response = await _httpClient.PostAsync(url, content);
-                var responseJson = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    System.Diagnostics.Debug.WriteLine($"CallAIAsync Error Response ({(int)response.StatusCode}): {responseJson}");
-                    return $"AI servisi yanıt veremedi ({(int)response.StatusCode}): {responseJson}";
-                }
-
-                var result = JsonConvert.DeserializeObject<OpenAIResponse>(responseJson);
-                return result?.choices?[0]?.message?.content ?? "";
+                return JsonConvert.DeserializeObject<List<SubTask>>(json) ?? new List<SubTask>();
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"CallAIAsync Error: {ex.Message}");
-                return $"AI servisi yanıt veremedi: {ex.Message}";
-            }
+            catch { return new List<SubTask>(); }
         }
 
-        private double CalculateEmployeeScore(Employee employee, TaskModel task, List<TaskModel> allTasks)
+        // =================================================================================
+        // 5. SESLİ KOMUT (Placeholder)
+        // =================================================================================
+        public async System.Threading.Tasks.Task<AppTask> ParseVoiceCommandToTaskAsync(string command)
         {
-            double score = 0;
-
-            // İş yükü skoru (düşük iş yükü = yüksek skor)
-            var workloadRatio = employee.WorkloadPercentage / 100.0;
-            score += (1 - workloadRatio) * 40;
-
-            // Yetenek uyumu (basit kontrol)
-            if (!string.IsNullOrEmpty(task.SkillsRequired) && !string.IsNullOrEmpty(employee.Skills))
-            {
-                var taskSkills = task.SkillsRequired.ToLower();
-                var empSkills = employee.Skills.ToLower();
-                if (empSkills.Contains(taskSkills) || taskSkills.Contains(empSkills))
-                    score += 30;
-            }
-
-            // Departman uyumu
-            if (employee.DepartmentId == task.DepartmentId)
-                score += 20;
-
-            // Mevcut görev sayısı (az görev = yüksek skor)
-            var currentTaskCount = allTasks.Count(t => t.AssignedToId == employee.Id && t.Status != TaskStatusModel.Completed);
-            score += Math.Max(0, 10 - currentTaskCount);
-
-            return score;
+            // İleride ses işleme buraya gelecek
+            await System.Threading.Tasks.Task.Delay(10);
+            return null;
         }
-    }
-
-    // Helper classes
-    public class EmployeeRecommendation
-    {
-        public Employee RecommendedEmployee { get; set; }
-        public double Score { get; set; }
-        public string Reason { get; set; }
-        public List<Employee> AlternativeEmployees { get; set; }
-    }
-
-    public class SubTask
-    {
-        public string Title { get; set; }
-        public string Description { get; set; }
-        public int EstimatedHours { get; set; }
-        public int Order { get; set; }
-    }
-
-    public class AnomalyDetection
-    {
-        public TaskModel Task { get; set; }
-        public AnomalyType Type { get; set; }
-        public AnomalySeverity Severity { get; set; }
-        public string Message { get; set; }
-    }
-
-    public enum AnomalyType
-    {
-        Overdue,
-        WorkloadOverload,
-        StuckTask,
-        QualityIssue
-    }
-
-    public enum AnomalySeverity
-    {
-        Low,
-        Medium,
-        High,
-        Critical
-    }
-
-    public class OpenAIResponse
-    {
-        public List<Choice> choices { get; set; }
-    }
-
-    public class Choice
-    {
-        public Message message { get; set; }
-    }
-
-    public class Message
-    {
-        public string content { get; set; }
     }
 }
-

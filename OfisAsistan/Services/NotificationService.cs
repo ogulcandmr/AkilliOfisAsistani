@@ -1,16 +1,18 @@
-using DevExpress.XtraEditors;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using TaskStatusModel = OfisAsistan.Models.TaskStatus;
+using DevExpress.XtraEditors;
 using OfisAsistan.Models;
+
+// Alias Tanımları (Çakışmayı Önler)
+using AppTask = OfisAsistan.Models.Task;
+using TaskStatusEnum = OfisAsistan.Models.TaskStatus;
 
 namespace OfisAsistan.Services
 {
-    public class NotificationService
+    public class NotificationService : IDisposable
     {
         private readonly DatabaseService _databaseService;
         private System.Windows.Forms.Timer _checkTimer;
@@ -29,11 +31,11 @@ namespace OfisAsistan.Services
         {
             _checkTimer = new System.Windows.Forms.Timer();
             _checkTimer.Interval = 60000; // 1 dakika
-            _checkTimer.Tick += CheckTimer_Tick;
+            _checkTimer.Tick += async (s, e) => await CheckTimer_Tick(s, e);
             _checkTimer.Start();
         }
 
-        private async void CheckTimer_Tick(object sender, EventArgs e)
+        private async System.Threading.Tasks.Task CheckTimer_Tick(object sender, EventArgs e)
         {
             await CheckDeadlinesAsync();
             await CheckMeetingsAsync();
@@ -48,8 +50,8 @@ namespace OfisAsistan.Services
                 var minDate = now.AddDays(-1);
                 var maxDate = now.AddDays(1);
 
-                foreach (var task in tasks.Where(t => 
-                    t.Status != TaskStatusModel.Completed && 
+                foreach (var task in tasks.Where(t =>
+                    t.Status != TaskStatusEnum.Completed &&
                     t.DueDate.HasValue &&
                     t.DueDate.Value >= minDate &&
                     t.DueDate.Value <= maxDate &&
@@ -89,11 +91,12 @@ namespace OfisAsistan.Services
         {
             try
             {
+                // GetMeetingsAsync artık DatabaseService içinde mevcut
                 var meetings = await _databaseService.GetMeetingsAsync();
                 var now = DateTime.Now;
 
-                foreach (var meeting in meetings.Where(m => 
-                    m.StartTime > now && 
+                foreach (var meeting in meetings.Where(m =>
+                    m.StartTime > now &&
                     !_notifiedMeetingIds.Contains(m.Id)))
                 {
                     var timeUntilMeeting = meeting.StartTime - now;
@@ -118,14 +121,12 @@ namespace OfisAsistan.Services
 
         private void ShowNotification(string title, string message, bool isUrgent)
         {
-            // Windows Forms için basit bildirim
-            // Daha gelişmiş için DevExpress Toast Notification kullanılabilir
             var form = Application.OpenForms.Cast<Form>().FirstOrDefault();
-            if (form != null)
+            if (form != null && !form.IsDisposed && form.IsHandleCreated)
             {
                 form.Invoke(new Action(() =>
                 {
-                    var result = XtraMessageBox.Show(
+                    XtraMessageBox.Show(
                         message,
                         title,
                         MessageBoxButtons.OK,
@@ -148,4 +149,3 @@ namespace OfisAsistan.Services
         }
     }
 }
-

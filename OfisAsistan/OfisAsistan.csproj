@@ -57,6 +57,10 @@
       <HintPath>C:\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraBars.v25.1.dll</HintPath>
       <Private>True</Private>
     </Reference>
+    <Reference Include="DevExpress.XtraGantt.v25.1, Version=25.1.7.0, Culture=neutral, PublicKeyToken=b88d1754d700e49a, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraGantt.v25.1.dll</HintPath>
+    </Reference>
     <Reference Include="DevExpress.XtraGrid.v25.1">
       <HintPath>C:\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraGrid.v25.1.dll</HintPath>
       <Private>True</Private>
@@ -72,6 +76,18 @@
     <Reference Include="DevExpress.Images.v25.1">
       <HintPath>C:\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.Images.v25.1.dll</HintPath>
       <Private>True</Private>
+    </Reference>
+    <Reference Include="DevExpress.XtraScheduler.v25.1, Version=25.1.7.0, Culture=neutral, PublicKeyToken=b88d1754d700e49a, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraScheduler.v25.1.dll</HintPath>
+    </Reference>
+    <Reference Include="DevExpress.XtraScheduler.v25.1.Core, Version=25.1.7.0, Culture=neutral, PublicKeyToken=b88d1754d700e49a, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraScheduler.v25.1.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="DevExpress.XtraScheduler.v25.1.Core.Desktop, Version=25.1.7.0, Culture=neutral, PublicKeyToken=b88d1754d700e49a, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraScheduler.v25.1.Core.Desktop.dll</HintPath>
     </Reference>
     <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>packages\Newtonsoft.Json.13.0.4\lib\net45\Newtonsoft.Json.dll</HintPath>
@@ -92,6 +108,9 @@
     <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="CalendarForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>

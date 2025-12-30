@@ -138,9 +138,7 @@
     <Compile Include="Forms\EmployeeWorkspace.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="Forms\VoiceManagerForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
+    <Compile Include="Forms\VoiceManagerForm.cs" />
     <Compile Include="Forms\CreateTaskForm.cs">
       <SubType>Form</SubType>
     </Compile>

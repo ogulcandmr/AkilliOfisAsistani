@@ -4,7 +4,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
-using System.Text.RegularExpressions; // Regex bunun için şart
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OfisAsistan.Models;
@@ -22,317 +22,361 @@ namespace OfisAsistan.Services
         private readonly HttpClient _httpClient;
         private readonly DatabaseService _databaseService;
 
+        // CHATBOT HAFIZASI (Sohbet geçmişini burada tutacağız)
+        private List<object> _chatHistory;
+
         public AIService(string apiKey, string apiUrl, DatabaseService databaseService)
         {
             _apiKey = apiKey;
-            // URL sonundaki slash'ları temizle
             _baseApiUrl = apiUrl?.TrimEnd('/');
-            _httpClient = new HttpClient();
-            // Llama 70B bazen yavaş düşünür, süreyi güvenli aralığa (120sn) çektik
-            _httpClient.Timeout = TimeSpan.FromSeconds(120);
             _databaseService = databaseService;
+
+            _httpClient = new HttpClient();
+            _httpClient.Timeout = TimeSpan.FromSeconds(120); // Uzun işlemler için süre
+
+            // Sohbet geçmişini başlat ve sistem rolünü ata
+            ResetChatHistory();
         }
 
-        // --- MERKEZİ AI MOTORU ---
-        // --- MERKEZİ AI MOTORU (URL FIX) ---
-        private async System.Threading.Tasks.Task<string> CallAIAsync(string systemPrompt, string userPrompt, bool requireJson = false)
+        // --- 1. SOHBET YÖNETİMİ (CHATBOT) ---
+
+        /// <summary>
+        /// Sohbet geçmişini temizler ve asistanı sıfırlar.
+        /// </summary>
+        public void ResetChatHistory()
         {
-            try
+            _chatHistory = new List<object>
             {
-                // Model ayarları (Groq için Llama3-70b veya 8b)
-                string modelName = "llama-3.3-70b-versatile";
-                if (_baseApiUrl.Contains("groq")) modelName = "llama-3.3-70b-versatile"; // Model ismini garantile
-
-                var requestBody = new
-                {
-                    model = modelName,
-                    messages = new[]
-                    {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userPrompt }
-            },
-                    temperature = 0.5,
-                    response_format = (object)null
-                };
-
-                var jsonContent = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
-                var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
-
-                // --- URL DÜZELTME (BURASI %100 ÇÖZÜM) ---
-                string finalUrl = _baseApiUrl.TrimEnd('/');
-
-                // Eğer adres Groq ise, ne gelirse gelsin doğru adresi biz yazıyoruz.
-                if (finalUrl.Contains("groq.com"))
-                {
-                    finalUrl = "https://api.groq.com/openai/v1/chat/completions";
-                }
-                else if (!finalUrl.EndsWith("/chat/completions"))
-                {
-                    // OpenAI veya diğerleri için standart ekleme
-                    finalUrl += "/v1/chat/completions";
-                }
-
-                // Hata ayıklama için URL'i yazdır (Output'ta tam adresi görmelisin)
-                System.Diagnostics.Debug.WriteLine($"[AI URL FIX]: {finalUrl}");
-
-                var response = await _httpClient.PostAsync(finalUrl, content);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    string err = await response.Content.ReadAsStringAsync();
-                    System.Diagnostics.Debug.WriteLine($"API Hatası ({response.StatusCode}): {err}");
-                    return null;
-                }
-
-                var responseJson = await response.Content.ReadAsStringAsync();
-                dynamic result = JsonConvert.DeserializeObject(responseJson);
-                string aiText = result?.choices?[0]?.message?.content;
-
-                return aiText;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("AI Call Hatası: " + ex.Message);
-                return null;
-            }
+                new { role = "system", content = "Sen 'Ofis Asistanı' adında yardımsever, zeki ve profesyonel bir yapay zeka asistanısın. Türkçe konuş. Kullanıcının ofis işlerini, görevlerini ve planlamalarını yönetmesine yardımcı ol. Kısa ve net cevaplar ver." }
+            };
         }
 
-        // AGRESİF JSON TEMİZLEYİCİ
-        // AI bazen "İşte JSON:" diye cümleye başlar, bu fonksiyon sadece süslü parantez arasını alır.
-        private string CleanJson(string text)
+        /// <summary>
+        /// Chatbot ile konuşmak için bu fonksiyonu kullanın. Geçmişi hatırlar.
+        /// </summary>
+        public async Task<string> ChatWithAssistantAsync(string userMessage)
+        {
+            // Kullanıcı mesajını geçmişe ekle
+            _chatHistory.Add(new { role = "user", content = userMessage });
+
+            // API'ye tüm geçmişi gönder
+            string aiResponse = await SendRequestToAIAsync(_chatHistory);
+
+            if (!string.IsNullOrEmpty(aiResponse))
+            {
+                // AI cevabını da geçmişe ekle
+                _chatHistory.Add(new { role = "assistant", content = aiResponse });
+                return aiResponse;
+            }
+
+            return "Üzgünüm, şu an bağlantı kuramıyorum.";
+        }
+
+        // --- 2. ÇEKİRDEK AI MOTORU (RETRY MEKANİZMALI) ---
+
+        private async Task<string> SendRequestToAIAsync(object messages, bool jsonMode = false)
+        {
+            int maxRetries = 3; // Hata olursa 3 kere dene
+            int delay = 1000; // İlk bekleme 1 saniye
+
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    // URL Düzenleme
+                    string finalUrl = _baseApiUrl;
+                    if (finalUrl.Contains("groq.com"))
+                        finalUrl = "https://api.groq.com/openai/v1/chat/completions";
+                    else if (!finalUrl.EndsWith("/chat/completions"))
+                        finalUrl += "/v1/chat/completions";
+
+                    // İstek Gövdesi
+                    var requestBody = new
+                    {
+                        model = "llama-3.3-70b-versatile", // Veya gpt-4o-mini vs.
+                        messages = messages,
+                        temperature = jsonMode ? 0.3 : 0.7, // JSON istiyorsak daha tutarlı olsun
+                        response_format = jsonMode ? new { type = "json_object" } : null
+                    };
+
+                    var jsonContent = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+                    var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+                    _httpClient.DefaultRequestHeaders.Clear();
+                    _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+
+                    var response = await _httpClient.PostAsync(finalUrl, content);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        string err = await response.Content.ReadAsStringAsync();
+                        System.Diagnostics.Debug.WriteLine($"AI API Hatası ({response.StatusCode}): {err}");
+
+                        // Eğer 429 (Too Many Requests) veya 5xx hatasıysa bekle ve tekrar dene
+                        if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
+                        {
+                            await System.Threading.Tasks.Task.Delay(delay);
+                            delay *= 2; // Bekleme süresini katla (Exponential Backoff)
+                            continue;
+                        }
+                        return null;
+                    }
+
+                    var responseJson = await response.Content.ReadAsStringAsync();
+                    dynamic result = JsonConvert.DeserializeObject(responseJson);
+                    return result?.choices?[0]?.message?.content;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"AI Bağlantı Hatası (Deneme {i + 1}): {ex.Message}");
+                    if (i == maxRetries - 1) return null; // Son deneme de başarısızsa null dön
+                    await System.Threading.Tasks.Task.Delay(delay);
+                }
+            }
+            return null;
+        }
+
+        // Tek seferlik komutlar için yardımcı metod (Stateless)
+        private async Task<string> CallSingleShotAsync(string systemPrompt, string userPrompt, bool forceJson = false)
+        {
+            var messages = new[]
+            {
+                new { role = "system", content = systemPrompt + (forceJson ? " Yanıtı SADECE geçerli bir JSON formatında ver. Başka açıklama yapma." : "") },
+                new { role = "user", content = userPrompt }
+            };
+            return await SendRequestToAIAsync(messages, forceJson);
+        }
+
+        // --- 3. AKILLI JSON TEMİZLEYİCİ (Regex Destekli) ---
+        private string ExtractJson(string text)
         {
             if (string.IsNullOrEmpty(text)) return null;
 
             // Markdown temizliği
             text = text.Replace("```json", "").Replace("```JSON", "").Replace("```", "").Trim();
 
-            // İlk { ve son } arasını bul
+            // JSON bloğunu bul
             int start = text.IndexOf('{');
             int end = text.LastIndexOf('}');
 
             if (start > -1 && end > start)
+            {
                 return text.Substring(start, end - start + 1);
+            }
 
-            return text;
+            return text; // Bulamazsa ham metni döndür (belki zaten temizdir)
         }
 
-        // --- 1. PERSONEL ÖNERİSİ (GARANTİLİ ÇALIŞAN VERSİYON) ---
-        public async System.Threading.Tasks.Task<EmployeeRecommendation> RecommendEmployeeForTaskAsync(AppTask task)
+        // --- 4. GELİŞMİŞ PERSONEL ÖNERİSİ ---
+        public async Task<EmployeeRecommendation> RecommendEmployeeForTaskAsync(AppTask task)
         {
             var employees = await _databaseService.GetEmployeesAsync();
             var activeEmployees = employees?.Where(e => e.IsActive).ToList();
 
             if (activeEmployees == null || !activeEmployees.Any()) return null;
 
-            // --- PLAN A: YAPAY ZEKA ---
-            try
-            {
-                var empList = string.Join("\n", activeEmployees.Select(e =>
-                    $"- ID:{e.Id} | İsim:{e.FullName} | Dept:{e.DepartmentId} | Yetenek:{e.Skills} | Yük:%{e.WorkloadPercentage}"
-                ));
+            // Veriyi string'e çevir
+            var empList = string.Join("\n", activeEmployees.Select(e =>
+                $"- ID:{e.Id}, İsim:{e.FullName}, Dept:{e.DepartmentId}, Yetenekler:[{e.Skills}], ŞuAnkiYük:%{e.WorkloadPercentage}"
+            ));
 
-                string systemPrompt = "Sen bir İK yazılımısın. Sadece JSON formatında cevap ver. Sohbet etme.";
+            string systemPrompt = @"Sen uzman bir İnsan Kaynakları yöneticisisin. Görev için en uygun personeli seçmelisin.
+                                    Kriterler:
+                                    1. Yetenek uyumu (En önemli).
+                                    2. İş yükü dengesi (Aşırı yüklü kişiye verme).
+                                    3. Departman uygunluğu.";
 
-                string userPrompt = $@"
-                GÖREV: {task.Title} (Aranan: {task.SkillsRequired}, DeptID: {task.DepartmentId})
+            string userPrompt = $@"
+                GÖREV: {task.Title}
+                GEREKEN YETENEKLER: {task.SkillsRequired}
+                DEPARTMAN ID: {task.DepartmentId}
                 
-                ADAYLAR:
+                ADAY LİSTESİ:
                 {empList}
 
-                EN UYGUN ADAYI SEÇ.
-                
-                İSTENEN ÇIKTI (JSON):
-                {{ ""TargetId"": 123, ""Reason"": ""Gerekçe buraya"" }}
-                ";
+                Lütfen analiz et ve sonucu aşağıdaki JSON formatında ver:
+                {{
+                    ""TargetId"": 123,
+                    ""Reason"": ""Neden seçildiğine dair detaylı ve mantıklı bir açıklama.""
+                }}";
 
-                // JSON zorlamasını kapattık, metin olarak istiyoruz (false)
-                var rawResponse = await CallAIAsync(systemPrompt, userPrompt, false);
+            var aiResponse = await CallSingleShotAsync(systemPrompt, userPrompt, true);
 
-                if (!string.IsNullOrEmpty(rawResponse))
+            // Yapay Zeka Cevabını İşle
+            if (!string.IsNullOrEmpty(aiResponse))
+            {
+                try
                 {
-                    int foundId = 0;
-                    string foundReason = "";
+                    string json = ExtractJson(aiResponse);
+                    var obj = JObject.Parse(json);
+                    int selectedId = (int)obj["TargetId"];
+                    string reason = (string)obj["Reason"];
 
-                    // Deneme 1: Temiz JSON Parse
-                    try
-                    {
-                        var clean = CleanJson(rawResponse);
-                        var obj = JObject.Parse(clean);
-                        // Farklı isimlendirmeleri yakala
-                        foundId = (int)(obj["TargetId"] ?? obj["EmployeeId"] ?? obj["id"] ?? 0);
-                        foundReason = (string)(obj["Reason"] ?? obj["reason"] ?? "");
-                    }
-                    catch
-                    {
-                        // Deneme 2: REGEX İLE ZORLA ALMA (JSON bozuksa burası kurtarır)
-                        var match = Regex.Match(rawResponse, @"TargetId""\s*:\s*(\d+)");
-                        if (!match.Success) match = Regex.Match(rawResponse, @"ID""\s*:\s*(\d+)");
-
-                        if (match.Success)
-                        {
-                            foundId = int.Parse(match.Groups[1].Value);
-                            foundReason = "AI önerisi metin içerisinden ayıklandı.";
-                        }
-                    }
-
-                    var aiEmp = activeEmployees.FirstOrDefault(e => e.Id == foundId);
-                    if (aiEmp != null)
+                    var selectedEmp = activeEmployees.FirstOrDefault(e => e.Id == selectedId);
+                    if (selectedEmp != null)
                     {
                         return new EmployeeRecommendation
                         {
-                            RecommendedEmployee = aiEmp,
-                            Reason = string.IsNullOrEmpty(foundReason) ? "Yetenek ve iş yükü analizine göre seçildi." : foundReason
+                            RecommendedEmployee = selectedEmp,
+                            Reason = reason
                         };
                     }
                 }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine("AI JSON Parse Hatası: " + ex.Message);
+                }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("AI Öneri Hatası: " + ex.Message);
-            }
 
-            // --- PLAN B: YEDEK MEKANİZMA (AI CEVAP VERMEZSE BURASI ÇALIŞIR) ---
-            // Burası sayesinde buton asla boş dönmez.
-
-            var candidates = activeEmployees.Where(e => e.DepartmentId == task.DepartmentId).ToList();
-            if (!candidates.Any()) candidates = activeEmployees; // Kimse uymuyorsa herkes adaydır
-
-            // İş yükü en az olanı seç
-            var bestMathMatch = candidates.OrderBy(e => e.WorkloadPercentage).First();
+            // FALLBACK (Yedek Plan): AI başarısız olursa matematiksel hesap yap
+            var fallback = activeEmployees
+                .OrderByDescending(e => task.SkillsRequired != null && e.Skills != null && e.Skills.Contains(task.SkillsRequired)) // Yetenek var mı?
+                .ThenBy(e => e.WorkloadPercentage) // Sonra iş yükü az olan
+                .FirstOrDefault();
 
             return new EmployeeRecommendation
             {
-                RecommendedEmployee = bestMathMatch,
-                Reason = $"[Sistem Önerisi] AI yanıt vermediği için, iş yükü en düşük (%{bestMathMatch.WorkloadPercentage}) ve departmanı en uygun personel seçildi."
+                RecommendedEmployee = fallback,
+                Reason = "AI servisine erişilemediği için iş yükü en uygun personel otomatik seçildi."
             };
         }
 
-        // --- 2. ANOMALİ TESPİTİ (GARANTİLİ) ---
-        public async System.Threading.Tasks.Task<List<AnomalyDetection>> DetectAnomaliesAsync()
+        // --- 5. DETAYLI ANOMALİ TESPİTİ ---
+        public async Task<List<AnomalyDetection>> DetectAnomaliesAsync()
         {
-            await System.Threading.Tasks.Task.Delay(100);
             var anomalies = new List<AnomalyDetection>();
+            var tasks = await _databaseService.GetTasksAsync();
+            var employees = await _databaseService.GetEmployeesAsync();
 
-            try
+            // Tamamlanmamış görevleri al
+            var activeTasks = tasks.Where(t => t.Status != TaskStatusEnum.Completed).ToList();
+            if (!activeTasks.Any()) return anomalies;
+
+            // Veri seti hazırlığı (Anonimleştirilmiş ve özet)
+            var analysisData = activeTasks.Select(t => new
             {
-                var tasks = await _databaseService.GetTasksAsync();
-                var employees = await _databaseService.GetEmployeesAsync();
-                var activeTasks = tasks.Where(t => t.Status != TaskStatusEnum.Completed).ToList();
+                t.Id,
+                t.Title,
+                DueDate = t.DueDate?.ToString("yyyy-MM-dd"),
+                Priority = t.Priority.ToString(),
+                AssignedPerson = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.FullName ?? "Atanmamış",
+                AssignedPersonWorkload = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.WorkloadPercentage ?? 0
+            }).Take(15).ToList(); // Token tasarrufu için max 15 görev
 
-                if (!activeTasks.Any()) return anomalies;
+            string systemPrompt = "Sen bir Proje Denetçisisin. Projedeki riskleri, mantıksız atamaları ve gecikmeleri tespit et.";
+            string userPrompt = $@"
+                Aşağıdaki görev listesini analiz et.
+                BUGÜNÜN TARİHİ: {DateTime.Now:yyyy-MM-dd}
 
-                // Token limiti dolmasın diye sadece ilk 10 görevi gönderiyoruz
-                var tasksData = activeTasks.Select(t => new {
-                    t.Id,
-                    t.Title,
-                    DueDate = t.DueDate.HasValue ? t.DueDate.Value.ToString("yyyy-MM-dd") : "Belirsiz",
-                    Priority = t.Priority.ToString(),
-                    Assigned = t.AssignedToId != 0 ? employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.Position : "Atanmamış"
-                }).Take(10);
+                VERİLER:
+                {JsonConvert.SerializeObject(analysisData)}
 
-                string systemPrompt = "Sen bir denetçisin. Sadece JSON ver.";
-                string userPrompt = $@"
-                DATA: {JsonConvert.SerializeObject(tasksData)}
-                TARİH: {DateTime.Now:yyyy-MM-dd}
-
-                Riskleri bul (Geciken=High, Yanlış Atama=Medium). Risk yoksa 'Durum Normal' de.
+                Kurallar:
+                - Tarihi geçmiş görevler: Yüksek Risk (High)
+                - İş yükü %80 üzeri kişiye atanan yeni görevler: Orta Risk (Medium)
+                - Atanmamış yüksek öncelikli görevler: Yüksek Risk (High)
                 
-                İSTENEN ÇIKTI (JSON):
-                {{ ""items"": [ {{ ""TaskId"": 1, ""Msg"": ""..."", ""Sev"": ""High"" }} ] }}
-                ";
+                Çıktı Formatı (JSON Dizisi):
+                {{
+                    ""anomalies"": [
+                        {{ ""TaskId"": 1, ""Message"": ""Açıklama"", ""Severity"": ""High"" }}
+                    ]
+                }}";
 
-                var rawResponse = await CallAIAsync(systemPrompt, userPrompt, false);
+            var response = await CallSingleShotAsync(systemPrompt, userPrompt, true);
 
-                if (!string.IsNullOrEmpty(rawResponse))
+            if (!string.IsNullOrEmpty(response))
+            {
+                try
                 {
-                    string clean = CleanJson(rawResponse);
-                    if (!string.IsNullOrEmpty(clean))
-                    {
-                        var jsonObj = JObject.Parse(clean);
-                        if (jsonObj["items"] != null)
-                        {
-                            foreach (var item in jsonObj["items"])
-                            {
-                                int tId = (int)item["TaskId"];
-                                var task = tasks.FirstOrDefault(t => t.Id == tId);
-                                if (task != null)
-                                {
-                                    string s = (string)item["Sev"];
-                                    var severity = s.StartsWith("H") ? AnomalySeverity.High : (s.StartsWith("M") ? AnomalySeverity.Medium : AnomalySeverity.Low);
+                    string cleanJson = ExtractJson(response);
+                    var root = JObject.Parse(cleanJson);
 
-                                    anomalies.Add(new AnomalyDetection
-                                    {
-                                        Task = task,
-                                        Message = (string)item["Msg"],
-                                        Severity = severity
-                                    });
-                                }
+                    if (root["anomalies"] is JArray arr)
+                    {
+                        foreach (var item in arr)
+                        {
+                            int tId = (int)item["TaskId"];
+                            var originalTask = tasks.FirstOrDefault(t => t.Id == tId);
+                            if (originalTask != null)
+                            {
+                                string sevStr = (string)item["Severity"];
+                                var severity = sevStr.StartsWith("H", StringComparison.OrdinalIgnoreCase) ? AnomalySeverity.High :
+                                               (sevStr.StartsWith("M", StringComparison.OrdinalIgnoreCase) ? AnomalySeverity.Medium : AnomalySeverity.Low);
+
+                                anomalies.Add(new AnomalyDetection
+                                {
+                                    Task = originalTask,
+                                    Message = (string)item["Message"],
+                                    Severity = severity
+                                });
                             }
                         }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("AI Anomali Hatası: " + ex.Message);
-            }
-
-            // FALLBACK: Eğer AI hata verdiyse ve liste boşsa, manuel bir mesaj ekle
-            if (anomalies.Count == 0)
-            {
-                var tasks = await _databaseService.GetTasksAsync();
-                if (tasks.Any())
+                catch (Exception ex)
                 {
-                    anomalies.Add(new AnomalyDetection
-                    {
-                        Task = tasks.First(),
-                        Message = "AI servisine şu an ulaşılamıyor. Genel sistem kontrolleri yapıldı, kritik sorun görülmedi (Çevrimdışı Mod).",
-                        Severity = AnomalySeverity.Low
-                    });
+                    System.Diagnostics.Debug.WriteLine("Anomali Parse Hatası: " + ex.Message);
                 }
             }
 
             return anomalies;
         }
 
-        // --- DİĞER FONKSİYONLAR ---
-        public async System.Threading.Tasks.Task<string> GenerateDailyBriefingAsync(int employeeId)
+        // --- 6. AKILLI GÖREV BÖLÜCÜ (Task Breakdown) ---
+        public async Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
+        {
+            string systemPrompt = "Sen bir proje yöneticisisin. Verilen ana görevi mantıklı, yapılabilir küçük alt görevlere böl.";
+            string userPrompt = $@"
+                GÖREV TANIMI: {taskDescription}
+                
+                Bu görevi alt adımlara ayır ve her biri için tahmini saat (Hours) belirle.
+                JSON Formatı:
+                {{
+                    ""steps"": [
+                        {{ ""Title"": ""Gereksinim analizi yap"", ""Hours"": 2 }},
+                        {{ ""Title"": ""Veritabanı tasarımını çıkar"", ""Hours"": 4 }}
+                    ]
+                }}";
+
+            var response = await CallSingleShotAsync(systemPrompt, userPrompt, true);
+            var resultList = new List<SubTask>();
+
+            if (!string.IsNullOrEmpty(response))
+            {
+                try
+                {
+                    var obj = JObject.Parse(ExtractJson(response));
+                    foreach (var s in obj["steps"])
+                    {
+                        resultList.Add(new SubTask
+                        {
+                            Title = (string)s["Title"],
+                            EstimatedHours = (int)s["Hours"]
+                        });
+                    }
+                }
+                catch { /* Sessizce başarısız ol, boş liste dön */ }
+            }
+            return resultList;
+        }
+
+        // --- 7. GÜNLÜK ÖZET (Smart Briefing) ---
+        public async Task<string> GenerateDailyBriefingAsync(int employeeId)
         {
             var tasks = await _databaseService.GetTasksAsync(employeeId);
-            if (!tasks.Any()) return "Görev yok.";
-            string p = $"Şunları özetle: {string.Join(", ", tasks.Take(5).Select(t => t.Title))}";
-            return await CallAIAsync("Kısa özet geç.", p, false) ?? "Özet oluşturulamadı.";
+            var emp = (await _databaseService.GetEmployeesAsync()).FirstOrDefault(e => e.Id == employeeId);
+
+            if (!tasks.Any()) return $"Sayın {emp?.FullName}, şu an üzerinizde bekleyen görev bulunmuyor. İyi çalışmalar!";
+
+            string userPrompt = $@"
+                KULLANICI: {emp?.FullName}
+                GÖREVLERİ: {string.Join(", ", tasks.Where(t => t.Status != TaskStatusEnum.Completed).Select(t => $"{t.Title} ({t.Priority})"))}
+                
+                Bu kullanıcıya sabah brifingi ver. Motive edici ol, acil işleri vurgula. (Maksimum 3 cümle)";
+
+            return await CallSingleShotAsync("Sen kişisel bir asistansın.", userPrompt) ?? "Özet oluşturulamadı.";
         }
 
-        public async System.Threading.Tasks.Task<List<SubTask>> BreakDownTaskAsync(string desc)
-        {
-            string p = $@"Görevi böl: {desc}. 
-            Format: {{ ""steps"": [ {{ ""Title"": ""Adım 1"", ""Hours"": 2 }} ] }}";
-
-            var raw = await CallAIAsync("Sadece JSON.", p, false);
-            string clean = CleanJson(raw);
-            if (string.IsNullOrEmpty(clean)) return new List<SubTask>();
-
-            try
-            {
-                var obj = JObject.Parse(clean);
-                var list = new List<SubTask>();
-                foreach (var s in obj["steps"])
-                {
-                    list.Add(new SubTask { Title = (string)s["Title"], EstimatedHours = (int)s["Hours"] });
-                }
-                return list;
-            }
-            catch { return new List<SubTask>(); }
-        }
-
-        public async System.Threading.Tasks.Task<AppTask> ParseVoiceCommandToTaskAsync(string command)
-        {
-            await System.Threading.Tasks.Task.Delay(10);
-            return null;
-        }
     }
 }

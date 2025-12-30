@@ -19,7 +19,7 @@ namespace OfisAsistan
     {
         private DatabaseService _databaseService;
         private AIService _aiService;
-        private VoiceService _voiceService;
+        // VoiceService kaldırıldı
         private NotificationService _notificationService;
         private User _currentUser;
 
@@ -33,25 +33,29 @@ namespace OfisAsistan
 
         private void InitializeServices()
         {
-            // ... (keep services initialization same)
+            // Çevresel değişkenleri veya varsayılanları al
             var supabaseUrl = Environment.GetEnvironmentVariable("SUPABASE_URL") ?? System.Configuration.ConfigurationManager.AppSettings["SupabaseUrl"] ?? "https://your-project.supabase.co";
             var supabaseKey = Environment.GetEnvironmentVariable("SUPABASE_KEY") ?? System.Configuration.ConfigurationManager.AppSettings["SupabaseKey"] ?? "your-key";
             var openAIApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY") ?? System.Configuration.ConfigurationManager.AppSettings["OpenAIApiKey"] ?? "your-key";
             var openAIUrl = Environment.GetEnvironmentVariable("GROQ_API_URL") ?? System.Configuration.ConfigurationManager.AppSettings["OpenAIUrl"] ?? "https://api.openai.com";
 
+            // Servisleri başlat
             _databaseService = new DatabaseService(supabaseUrl, supabaseKey);
             _aiService = new AIService(openAIApiKey, openAIUrl, _databaseService);
 
-            try { _voiceService = new VoiceService(); } catch { _voiceService = null; }
+            // VoiceService başlatma kodu kaldırıldı.
+
             _notificationService = new NotificationService(_databaseService);
         }
 
         private void InitializeCustomComponents()
         {
-            this.mnuManager.ItemClick += MnuManager_Click;
-            this.mnuEmployee.ItemClick += MnuEmployee_Click;
-            this.mnuVoice.ItemClick += MnuVoice_Click;
-            this.mnuExit.ItemClick += MnuExit_Click;
+            // Menü olaylarını bağla
+            if (this.mnuManager != null) this.mnuManager.ItemClick += MnuManager_Click;
+            if (this.mnuEmployee != null) this.mnuEmployee.ItemClick += MnuEmployee_Click;
+            if (this.mnuExit != null) this.mnuExit.ItemClick += MnuExit_Click;
+
+            // Ses menüsü olay bağlama (Click) kaldırıldı çünkü form silindi.
 
             UpdateMenuVisibility();
         }
@@ -73,17 +77,26 @@ namespace OfisAsistan
 
         private void UpdateMenuVisibility()
         {
+            // Eğer giriş yapılmadıysa her şeyi kapat
             if (_currentUser == null)
             {
-                mnuManager.Enabled = false;
-                mnuEmployee.Enabled = false;
-                mnuVoice.Enabled = false;
+                if (mnuManager != null) mnuManager.Enabled = false;
+                if (mnuEmployee != null) mnuEmployee.Enabled = false;
                 return;
             }
 
-            mnuManager.Enabled = _currentUser.Role == UserRole.Manager || _currentUser.Role == UserRole.Admin;
-            mnuEmployee.Enabled = true;
-            mnuVoice.Enabled = _voiceService != null && (_currentUser.Role == UserRole.Manager || _currentUser.Role == UserRole.Admin);
+            // Role göre yetkilendirme
+            if (mnuManager != null)
+                mnuManager.Enabled = _currentUser.Role == UserRole.Manager || _currentUser.Role == UserRole.Admin;
+
+            if (mnuEmployee != null)
+                mnuEmployee.Enabled = true;
+
+            // Ses menüsü varsa gizle (Kullanılmıyor)
+            if (mnuVoice != null)
+            {
+                mnuVoice.Visibility = BarItemVisibility.Never;
+            }
         }
 
         private void MnuManager_Click(object sender, ItemClickEventArgs e)
@@ -98,12 +111,7 @@ namespace OfisAsistan
             workspace.Show();
         }
 
-        private void MnuVoice_Click(object sender, ItemClickEventArgs e)
-        {
-            var voiceForm = new VoiceManagerForm(_voiceService, _aiService, _databaseService);
-            voiceForm.MdiParent = this;
-            voiceForm.Show();
-        }
+        // MnuVoice_Click Metodu TAMAMEN SİLİNDİ (VoiceManagerForm olmadığı için)
 
         private void MnuExit_Click(object sender, ItemClickEventArgs e)
         {
@@ -112,7 +120,7 @@ namespace OfisAsistan
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            _voiceService?.Dispose();
+            // VoiceService dispose kaldırıldı
             _notificationService?.Dispose();
             base.OnFormClosing(e);
         }

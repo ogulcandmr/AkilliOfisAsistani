@@ -1,3 +1,11 @@
+using DevExpress.Utils;
+using DevExpress.XtraBars;
+using DevExpress.XtraBars.Alerter;
+using DevExpress.XtraEditors;
+using DevExpress.XtraLayout;
+using DevExpress.XtraSplashScreen;
+using OfisAsistan.Models;
+using OfisAsistan.Services;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -6,16 +14,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using OfisAsistan.Models;
-using OfisAsistan.Services;
-using DevExpress.XtraEditors;
-using DevExpress.Utils;
-using DevExpress.XtraLayout;
-using DevExpress.XtraBars.Alerter;
-using DevExpress.XtraBars;
-using DevExpress.XtraSplashScreen;
-
-// --- ALIASLAR ---
+// ALIASLAR
 using AppTask = OfisAsistan.Models.Task;
 using SysTask = System.Threading.Tasks.Task;
 using TaskStatusModel = OfisAsistan.Models.TaskStatus;
@@ -30,26 +29,17 @@ namespace OfisAsistan.Forms
 
         // UI Bileşenleri
         private ListBoxControl lstPending, lstInProgress, lstCompleted;
-        private MemoEdit txtChatHistory, txtQuickNotes, txtBriefing; // txtBriefing eklendi
+        private MemoEdit txtChatHistory, txtQuickNotes, txtBriefing;
         private TextEdit txtChatInput;
         private AlertControl alertControl;
-
-        // Menü
         private PopupMenu taskPopupMenu;
         private BarManager barManager;
-
-        // Drag & Drop
         private ListBoxControl draggedSourceList;
 
-        // --- 1. RENKLER (İstediğin Açık Tonlar Geri Geldi) ---
-        private readonly Color clrSidebar = Color.FromArgb(99, 102, 241);     // Canlı İndigo
-        private readonly Color clrSidebarDark = Color.FromArgb(67, 56, 202);  // Gradient bitişi
-        private readonly Color clrBackground = Color.FromArgb(243, 244, 246); // Açık Gri Zemin
-
-        // Kart Başlık Renkleri (Göz alıcı)
-        private readonly Color clrHeaderPending = Color.FromArgb(255, 179, 0);   // Amber
-        private readonly Color clrHeaderProgress = Color.FromArgb(30, 136, 229); // Mavi
-        private readonly Color clrHeaderDone = Color.FromArgb(67, 160, 71);      // Yeşil
+        // --- RENK PALETİ ---
+        private readonly Color clrSidebar = Color.FromArgb(99, 102, 241);     // İndigo
+        private readonly Color clrSidebarDark = Color.FromArgb(67, 56, 202);
+        private readonly Color clrBackground = Color.FromArgb(240, 242, 245);
 
         public EmployeeWorkspace(DatabaseService databaseService, AIService aiService, int employeeId)
         {
@@ -58,44 +48,66 @@ namespace OfisAsistan.Forms
             _employeeId = employeeId;
 
             InitializeComponent();
+
+            // --- KRİTİK KOMUT: ESKİ HER ŞEYİ SİL ---
+            this.Controls.Clear();
+            // ---------------------------------------
+
             InitializeCustomUI();
             InitializeContextMenu();
 
             alertControl = new AlertControl();
             alertControl.AutoFormDelay = 4000;
 
-            // Verileri ve Brifingi Yükle
             this.Shown += async (s, e) => {
                 await LoadDataAsync();
                 await LoadDailyBriefing();
             };
         }
 
-        // --- 2. KART TASARIMI (Düzgün Hizalama) ---
+        // --- 1. KART GÖRÜNÜMÜ (HTML) ---
         public class TaskDisplayItem
         {
             public AppTask Task { get; set; }
 
+            // Metni belirli uzunlukta kesip alt satıra atan fonksiyon
+            private string FormatDescription(string text)
+            {
+                if (string.IsNullOrEmpty(text)) return "Açıklama yok.";
+                string clean = text.Replace("\n", " ").Replace("\r", "");
+
+                // Çok uzunsa kısalt
+                if (clean.Length > 120) clean = clean.Substring(0, 117) + "...";
+
+                // HTML içinde düzgün görünmesi için her 40 karakterde bir <br> ekle
+                StringBuilder sb = new StringBuilder();
+                int counter = 0;
+                foreach (char c in clean)
+                {
+                    sb.Append(c);
+                    counter++;
+                    if (counter >= 40 && c == ' ') // Kelime bölmemek için boşlukta kes
+                    {
+                        sb.Append("<br>");
+                        counter = 0;
+                    }
+                }
+                return sb.ToString();
+            }
+
             public override string ToString()
             {
-                string pColor = Task.Priority.ToString() == "High" ? "#E53935" : (Task.Priority.ToString() == "Medium" ? "#FB8C00" : "#43A047");
-                string dateStr = Task.DueDate.HasValue ? Task.DueDate.Value.ToString("dd MMM") : "-";
+                string pColor = Task.Priority.ToString() == "High" ? "red" : (Task.Priority.ToString() == "Medium" ? "#E67E22" : "green");
+                string dateStr = Task.DueDate.HasValue ? Task.DueDate.Value.ToString("dd.MM") : "-";
+                string desc = FormatDescription(Task.Description);
 
-                // Açıklama Metni Düzenleme (Satırları koru ama uzunsa kes)
-                string desc = Task.Description ?? "Açıklama yok.";
-                if (desc.Length > 80) desc = desc.Substring(0, 77) + "...";
-
-                // HTML Şablonu:
-                // 1. Satır: Başlık (Kalın)
-                // 2. Satır: Açıklama (İnce, Gri)
-                // 3. Satır: Öncelik ve Tarih
                 return $"<size=11><b>{Task.Title}</b></size><br>" +
-                       $"<size=9><color=#606060>{desc}</color></size><br><br>" +
+                       $"<size=9><color=#666666>{desc}</color></size><br><br>" +
                        $"<size=8><color={pColor}><b>● {Task.Priority}</b></color>      <color=gray>📅 {dateStr}</color></size>";
             }
         }
 
-        // --- 3. UI TASARIMI ---
+        // --- 2. UI TASARIMI (GroupControl Sistemine Geçildi) ---
         private void InitializeCustomUI()
         {
             this.Text = "Ofis Asistanı";
@@ -103,13 +115,13 @@ namespace OfisAsistan.Forms
             this.WindowState = FormWindowState.Maximized;
             this.BackColor = clrBackground;
 
-            // Ana İskelet
+            // ANA TABLO (Sol Menü | Sağ İçerik)
             var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(0) };
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280F)); // Sol Menü
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));  // Sağ İçerik
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260F));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             this.Controls.Add(mainLayout);
 
-            // --- SOL PANEL (AÇIK MOR GRADIENT) ---
+            // -- SOL PANEL --
             var leftPanel = new Panel { Dock = DockStyle.Fill };
             leftPanel.Paint += (s, e) => {
                 using (LinearGradientBrush brush = new LinearGradientBrush(leftPanel.ClientRectangle, clrSidebar, clrSidebarDark, 45F))
@@ -120,14 +132,14 @@ namespace OfisAsistan.Forms
             var lblLogo = new LabelControl { Text = "OFİS\nASİSTANI", Appearance = { Font = new Font("Segoe UI", 28, FontStyle.Bold), ForeColor = Color.White, TextOptions = { HAlignment = HorzAlignment.Center } }, Dock = DockStyle.Top, Padding = new Padding(0, 60, 0, 0), AutoSizeMode = LabelAutoSizeMode.None, Height = 200, BackColor = Color.Transparent };
             leftPanel.Controls.Add(lblLogo);
 
-            // --- SAĞ İÇERİK ---
-            var contentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(20) };
+            // -- SAĞ İÇERİK --
+            var contentPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(15) };
             mainLayout.Controls.Add(contentPanel, 1, 0);
 
-            // ÜST BAR (Pencere Kontrolleri + Butonlar)
-            var topBar = new Panel { Dock = DockStyle.Top, Height = 50, Margin = new Padding(0, 0, 0, 15) };
+            // ÜST BAR
+            var topBar = new Panel { Dock = DockStyle.Top, Height = 50, Margin = new Padding(0, 0, 0, 10) };
 
-            // Pencere Kontrolleri (Sağ Üst - Görünür Renkli Butonlar)
+            // Pencere Kontrolleri (X, Kare, Alt Tire)
             var pnlWinControls = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.LeftToRight, Width = 120 };
             var btnMin = CreateWindowBtn("_", (s, e) => this.WindowState = FormWindowState.Minimized);
             var btnMax = CreateWindowBtn("□", (s, e) => this.WindowState = (this.WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized));
@@ -135,24 +147,23 @@ namespace OfisAsistan.Forms
             pnlWinControls.Controls.AddRange(new Control[] { btnMin, btnMax, btnClose });
             topBar.Controls.Add(pnlWinControls);
 
-            // İşlem Butonları (Sol Üst)
+            // Sol Butonlar (Yenile, AI)
             var pnlTools = new FlowLayoutPanel { Dock = DockStyle.Left, FlowDirection = FlowDirection.LeftToRight, Width = 600 };
             var btnRefresh = CreateModernButton("🔄 Yenile", Color.FromArgb(33, 150, 243), async (s, e) => await LoadDataAsync());
             var btnAiWizard = CreateModernButton("✨ Alt Görev Sihirbazı", Color.FromArgb(156, 39, 176), async (s, e) => await OpenAiWizard());
-
             pnlTools.Controls.AddRange(new Control[] { btnRefresh, btnAiWizard });
             topBar.Controls.Add(pnlTools);
 
             contentPanel.Controls.Add(topBar);
 
-            // --- İÇERİK BÖLÜNMESİ (ÜST: KANBAN (%55) / ALT: ARAÇLAR (%45)) ---
-            var splitLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 15, 0, 0) };
-            splitLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
-            splitLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
+            // İÇERİK BÖLÜNMESİ
+            var splitLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 10, 0, 0) };
+            splitLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55F)); // Kanban %55
+            splitLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45F)); // Araçlar %45
             contentPanel.Controls.Add(splitLayout);
 
-            // A. KANBAN ALANI (3 Sütun)
-            var kanbanGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 0, 0, 20) };
+            // A. KANBAN ALANI (GroupControl Kullanarak)
+            var kanbanGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 0, 0, 15) };
             kanbanGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3F));
             kanbanGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3F));
             kanbanGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3F));
@@ -161,140 +172,110 @@ namespace OfisAsistan.Forms
             lstInProgress = CreateKanbanList();
             lstCompleted = CreateKanbanList();
 
-            AddKanbanColumn(kanbanGrid, "📋 BEKLEYENLER", lstPending, 0, clrHeaderPending);
-            AddKanbanColumn(kanbanGrid, "💻 YÜRÜTÜLEN", lstInProgress, 1, clrHeaderProgress);
-            AddKanbanColumn(kanbanGrid, "✅ TAMAMLANAN", lstCompleted, 2, clrHeaderDone);
+            // Sütunları GroupControl ile ekliyoruz (Başlık sorunu kesin çözüm)
+            AddGroupColumn(kanbanGrid, "📋 BEKLEYENLER", lstPending, 0, Color.Orange);
+            AddGroupColumn(kanbanGrid, "💻 YÜRÜTÜLEN", lstInProgress, 1, Color.DodgerBlue);
+            AddGroupColumn(kanbanGrid, "✅ TAMAMLANAN", lstCompleted, 2, Color.SeaGreen);
 
             splitLayout.Controls.Add(kanbanGrid, 0, 0);
 
-            // B. ARAÇLAR ALANI (3 Sütun: Brifing | Notlar | Chat)
+            // B. ARAÇLAR ALANI
             var toolsGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
-            toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F)); // Brifing
-            toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F)); // Notlar (Ortada geniş)
-            toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F)); // Chat
+            toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
+            toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F));
+            toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
 
-            // B1. GÜNLÜK BRİFİNG (Pomodoro Yerine Geldi)
-            var pnlBrief = CreateCardPanel("📢 Günlük Brifing");
-            txtBriefing = new MemoEdit { Dock = DockStyle.Fill, Properties = { ReadOnly = true, BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder, Appearance = { Font = new Font("Segoe UI", 10), BackColor = Color.White } } };
-            pnlBrief.Controls.Add(txtBriefing);
-            toolsGrid.Controls.Add(pnlBrief, 0, 0);
+            // B1. Brifing
+            var grpBrief = CreateGroupPanel("📢 Günlük Brifing");
+            txtBriefing = new MemoEdit { Dock = DockStyle.Fill, Properties = { ReadOnly = true, BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder } };
+            grpBrief.Controls.Add(txtBriefing);
+            toolsGrid.Controls.Add(grpBrief, 0, 0);
 
-            // B2. HIZLI NOTLAR
-            var pnlNotes = CreateCardPanel("📝 Hızlı Notlar");
+            // B2. Notlar
+            var grpNotes = CreateGroupPanel("📝 Hızlı Notlar");
             txtQuickNotes = new MemoEdit { Dock = DockStyle.Fill, Properties = { BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder, NullText = "Not almak için buraya yazın..." } };
-            pnlNotes.Controls.Add(txtQuickNotes);
-            toolsGrid.Controls.Add(pnlNotes, 1, 0);
+            grpNotes.Controls.Add(txtQuickNotes);
+            toolsGrid.Controls.Add(grpNotes, 1, 0);
 
-            // B3. AI CHAT
-            var pnlChat = CreateCardPanel("🤖 Asistan");
+            // B3. AI Chat
+            var grpChat = CreateGroupPanel("🤖 Asistan");
+            var chatLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            chatLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+
             txtChatHistory = new MemoEdit { Dock = DockStyle.Fill, Properties = { ReadOnly = true, BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder } };
-            var pnlInput = new Panel { Dock = DockStyle.Bottom, Height = 40, Padding = new Padding(2), BackColor = Color.WhiteSmoke };
             txtChatInput = new TextEdit { Dock = DockStyle.Fill, Properties = { NullText = "Bir şeyler sor..." } };
             txtChatInput.KeyDown += async (s, e) => { if (e.KeyCode == Keys.Enter) await SendMessageToAI(); };
-            pnlInput.Controls.Add(txtChatInput);
-            pnlChat.Controls.Add(txtChatHistory); pnlChat.Controls.Add(pnlInput);
-            toolsGrid.Controls.Add(pnlChat, 2, 0);
+
+            chatLayout.Controls.Add(txtChatHistory, 0, 0);
+            chatLayout.Controls.Add(txtChatInput, 0, 1);
+            grpChat.Controls.Add(chatLayout);
+            toolsGrid.Controls.Add(grpChat, 2, 0);
 
             splitLayout.Controls.Add(toolsGrid, 0, 1);
 
+            // Eventler
             AttachListEvents(lstPending);
             AttachListEvents(lstInProgress);
             AttachListEvents(lstCompleted);
         }
 
-        // --- 4. YENİ ÖZELLİK: GÜNLÜK BRİFİNG ---
+        // --- 3. İŞLEVLER ---
         private async SysTask LoadDailyBriefing()
         {
-            txtBriefing.Text = "AI, görevlerinizi analiz ediyor ve brifing hazırlıyor...";
-            try
-            {
-                string briefing = await _aiService.GenerateDailyBriefingAsync(_employeeId);
-                txtBriefing.Text = briefing;
-            }
-            catch
-            {
-                txtBriefing.Text = "Brifing yüklenirken hata oluştu.";
-            }
+            txtBriefing.Text = "AI verilerinizi analiz ediyor...";
+            try { txtBriefing.Text = await _aiService.GenerateDailyBriefingAsync(_employeeId); }
+            catch { txtBriefing.Text = "Brifing yüklenemedi."; }
         }
 
-        // --- 5. AI ALT GÖREV SİHİRBAZI ---
         private async SysTask OpenAiWizard()
         {
-            var selectedItem = GetSelectedTaskItem();
-            if (selectedItem == null)
-            {
-                alertControl.Show(this, "Uyarı", "Lütfen işlem yapılacak görevi seçin.", "", (Image)null);
-                return;
-            }
+            var item = GetSelectedTaskItem();
+            if (item == null) { alertControl.Show(this, "Uyarı", "Lütfen bir görev seçin.", "", (Image)null); return; }
 
             IOverlaySplashScreenHandle overlay = SplashScreenManager.ShowOverlayForm(this);
-
             try
             {
-                var subTasks = await _aiService.BreakDownTaskAsync(selectedItem.Task.Title + " - " + selectedItem.Task.Description);
+                var subs = await _aiService.BreakDownTaskAsync(item.Task.Title + " - " + item.Task.Description);
                 SplashScreenManager.CloseOverlayForm(overlay);
-
-                if (subTasks != null && subTasks.Any())
+                if (subs != null && subs.Any())
                 {
-                    string msg = $"AI, '{selectedItem.Task.Title}' için {subTasks.Count} alt adım önerdi. Notlara ekleyelim mi?";
-                    if (XtraMessageBox.Show(msg, "AI Planlama", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    if (XtraMessageBox.Show($"{subs.Count} alt adım önerildi. Notlara eklensin mi?", "AI Planlama", MessageBoxButtons.YesNo) == DialogResult.Yes)
                     {
                         StringBuilder sb = new StringBuilder();
-                        sb.AppendLine($"\r\n=== 📌 PLAN: {selectedItem.Task.Title.ToUpper()} ===");
-                        foreach (var st in subTasks) sb.AppendLine($"[ ] {st.Title} ({st.EstimatedHours}s)");
+                        sb.AppendLine($"\r\n=== PLAN: {item.Task.Title.ToUpper()} ===");
+                        foreach (var s in subs) sb.AppendLine($"[ ] {s.Title} ({s.EstimatedHours}s)");
                         sb.AppendLine("================================\r\n");
-
                         txtQuickNotes.Text += sb.ToString();
-                        txtQuickNotes.SelectionStart = txtQuickNotes.Text.Length;
-                        txtQuickNotes.ScrollToCaret();
-
-                        alertControl.Show(this, "Kaydedildi", "Plan notlara eklendi.", "", (Image)null);
+                        alertControl.Show(this, "Başarılı", "Notlara eklendi.", "", (Image)null);
                     }
                 }
-                else
-                {
-                    XtraMessageBox.Show("AI yanıt veremedi.", "Hata");
-                }
+                else XtraMessageBox.Show("AI yanıt veremedi.", "Hata");
             }
-            catch (Exception ex)
-            {
-                if (overlay != null) SplashScreenManager.CloseOverlayForm(overlay);
-                XtraMessageBox.Show("Hata: " + ex.Message);
-            }
+            catch { if (overlay != null) SplashScreenManager.CloseOverlayForm(overlay); }
         }
 
-        // --- 6. VERİ YÜKLEME ---
         private async SysTask LoadDataAsync()
         {
             try
             {
                 var tasks = await _databaseService.GetTasksAsync(_employeeId);
-                if (this.IsHandleCreated)
-                {
-                    this.Invoke(new MethodInvoker(() => {
-                        lstPending.Items.Clear(); lstInProgress.Items.Clear(); lstCompleted.Items.Clear();
-                        foreach (var t in tasks)
-                        {
-                            var item = new TaskDisplayItem { Task = t };
-                            if (t.Status == TaskStatusModel.Pending) lstPending.Items.Add(item);
-                            else if (t.Status == TaskStatusModel.InProgress) lstInProgress.Items.Add(item);
-                            else if (t.Status == TaskStatusModel.Completed) lstCompleted.Items.Add(item);
-                        }
-                    }));
-                }
+                if (this.IsHandleCreated) this.Invoke(new MethodInvoker(() => {
+                    lstPending.Items.Clear(); lstInProgress.Items.Clear(); lstCompleted.Items.Clear();
+                    foreach (var t in tasks)
+                    {
+                        var item = new TaskDisplayItem { Task = t };
+                        if (t.Status == TaskStatusModel.Pending) lstPending.Items.Add(item);
+                        else if (t.Status == TaskStatusModel.InProgress) lstInProgress.Items.Add(item);
+                        else if (t.Status == TaskStatusModel.Completed) lstCompleted.Items.Add(item);
+                    }
+                }));
             }
             catch { }
         }
 
-        // --- 7. OLAYLAR ---
         private void AttachListEvents(ListBoxControl list)
         {
-            list.Click += (s, e) => {
-                if (list != lstPending) lstPending.SelectedIndex = -1;
-                if (list != lstInProgress) lstInProgress.SelectedIndex = -1;
-                if (list != lstCompleted) lstCompleted.SelectedIndex = -1;
-            };
-
             list.MouseDown += (s, e) => {
                 var index = list.IndexFromPoint(e.Location);
                 if (index != -1)
@@ -304,32 +285,19 @@ namespace OfisAsistan.Forms
                     else if (e.Button == MouseButtons.Left) { draggedSourceList = list; list.DoDragDrop(list.SelectedItem, DragDropEffects.Move); }
                 }
             };
-
             list.DoubleClick += (s, e) => {
                 var item = GetSelectedTaskItem();
-                if (item != null)
-                {
-                    try
-                    {
-                        var f = new TaskDetailForm(_databaseService, item.Task.Id, _employeeId, "Employee");
-                        if (f.ShowDialog() == DialogResult.OK) _ = LoadDataAsync();
-                    }
-                    catch { XtraMessageBox.Show(item.Task.Description, item.Task.Title); }
-                }
+                if (item != null) XtraMessageBox.Show(item.Task.Description, item.Task.Title);
             };
-
             list.DragOver += (s, e) => e.Effect = DragDropEffects.Move;
             list.DragDrop += async (s, e) => {
-                var targetList = s as ListBoxControl;
-                var item = e.Data.GetData(typeof(TaskDisplayItem)) as TaskDisplayItem;
-                if (item != null && targetList != draggedSourceList)
+                var target = s as ListBoxControl; var item = e.Data.GetData(typeof(TaskDisplayItem)) as TaskDisplayItem;
+                if (item != null && target != draggedSourceList)
                 {
-                    var newStatus = targetList == lstInProgress ? TaskStatusModel.InProgress : (targetList == lstCompleted ? TaskStatusModel.Completed : TaskStatusModel.Pending);
-                    if (draggedSourceList == lstCompleted && newStatus != TaskStatusModel.Completed) return;
-
-                    targetList.Items.Add(item); draggedSourceList.Items.Remove(item);
-                    item.Task.Status = newStatus;
-                    await _databaseService.UpdateTaskAsync(item.Task, _employeeId);
+                    var ns = target == lstInProgress ? TaskStatusModel.InProgress : (target == lstCompleted ? TaskStatusModel.Completed : TaskStatusModel.Pending);
+                    if (draggedSourceList == lstCompleted && ns != TaskStatusModel.Completed) return;
+                    target.Items.Add(item); draggedSourceList.Items.Remove(item);
+                    item.Task.Status = ns; await _databaseService.UpdateTaskAsync(item.Task, _employeeId);
                 }
             };
         }
@@ -344,19 +312,10 @@ namespace OfisAsistan.Forms
 
         private void InitializeContextMenu()
         {
-            barManager = new BarManager { Form = this };
-            taskPopupMenu = new PopupMenu(barManager);
-            var btnNotes = new BarButtonItem(barManager, "Notlara Kopyala");
-            btnNotes.ImageOptions.SvgImage = DevExpress.Images.ImageResourceCache.Default.GetSvgImage("notes");
-            btnNotes.ItemClick += (s, e) => {
-                var item = GetSelectedTaskItem();
-                if (item != null)
-                {
-                    txtQuickNotes.Text += $"\n📌 {item.Task.Title}\n{item.Task.Description}\n";
-                    alertControl.Show(this, "Başarılı", "Notlara eklendi.", "", (Image)null);
-                }
-            };
-            taskPopupMenu.AddItem(btnNotes);
+            barManager = new BarManager { Form = this }; taskPopupMenu = new PopupMenu(barManager);
+            var btn = new BarButtonItem(barManager, "Notlara Kopyala");
+            btn.ItemClick += (s, e) => { var i = GetSelectedTaskItem(); if (i != null) txtQuickNotes.Text += $"\n📌 {i.Task.Title}\n{i.Task.Description}\n"; };
+            taskPopupMenu.AddItem(btn);
         }
 
         private async SysTask SendMessageToAI()
@@ -372,42 +331,40 @@ namespace OfisAsistan.Forms
         private ListBoxControl CreateKanbanList() => new ListBoxControl
         {
             BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder,
-            Appearance = { Font = new Font("Segoe UI", 10), BackColor = Color.White, ForeColor = Color.FromArgb(40, 40, 40) },
-            ItemHeight = 120, // Kart yüksekliği
+            Appearance = { Font = new Font("Segoe UI", 9), BackColor = Color.White, ForeColor = Color.Black },
+            ItemHeight = 120, // Kart Yüksekliği (Açıklama sığsın diye)
             AllowHtmlDraw = DefaultBoolean.True,
             Dock = DockStyle.Fill
         };
 
-        private void AddKanbanColumn(TableLayoutPanel parent, string title, Control list, int col, Color color)
+        // GroupControl Kullanarak Başlık Sorununu Çözdük
+        private void AddGroupColumn(TableLayoutPanel parent, string title, Control list, int col, Color headerColor)
         {
-            // BAŞLIK DÜZELTMESİ: Label ve List'i Panel içine düzgünce yerleştirdik.
-            var pnl = new Panel { Dock = DockStyle.Fill, Margin = new Padding(10, 0, 10, 0), BackColor = Color.White, Padding = new Padding(1) };
-
-            // Başlık (Üstte Sabit)
-            var header = new LabelControl
+            var group = new GroupControl
             {
                 Text = title,
-                Dock = DockStyle.Top,
-                Height = 45,
-                AutoSizeMode = LabelAutoSizeMode.None,
-                Appearance = { BackColor = color, ForeColor = Color.White, Font = new Font("Segoe UI", 11, FontStyle.Bold), TextOptions = { HAlignment = HorzAlignment.Center } }
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5, 0, 5, 0)
             };
+            // Başlık stilini özelleştirme (Caption Image vs eklenebilir)
+            group.AppearanceCaption.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            group.AppearanceCaption.ForeColor = headerColor; // Başlık rengi
 
             list.Dock = DockStyle.Fill;
-
-            // Önce listeyi ekle (Fill), sonra başlığı ekle (Top) - WinForms mantığıyla başlık üstte kalır.
-            // Ama en garantisi:
-            pnl.Controls.Add(list);
-            pnl.Controls.Add(header);
-
-            parent.Controls.Add(pnl, col, 0);
+            group.Controls.Add(list);
+            parent.Controls.Add(group, col, 0);
         }
 
-        private Panel CreateCardPanel(string title)
+        private GroupControl CreateGroupPanel(string title)
         {
-            var pnl = new Panel { BackColor = Color.White, Dock = DockStyle.Fill, Margin = new Padding(10, 5, 10, 5), Padding = new Padding(5) };
-            var hdr = new LabelControl { Text = title, Dock = DockStyle.Top, Height = 30, Appearance = { Font = new Font("Segoe UI Semibold", 10), ForeColor = Color.Gray } };
-            pnl.Controls.Add(hdr); return pnl;
+            var group = new GroupControl
+            {
+                Text = title,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5)
+            };
+            group.AppearanceCaption.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            return group;
         }
 
         private SimpleButton CreateModernButton(string text, Color color, EventHandler onClick)
@@ -421,11 +378,10 @@ namespace OfisAsistan.Forms
         private SimpleButton CreateWindowBtn(string text, EventHandler onClick, bool isClose = false)
         {
             var btn = new SimpleButton { Text = text, Size = new Size(40, 35), Cursor = Cursors.Hand };
-            btn.Appearance.BackColor = Color.FromArgb(220, 220, 225); // Hafif gri arka plan (Görünür olması için)
+            btn.Appearance.BackColor = Color.FromArgb(220, 220, 225);
             btn.Appearance.ForeColor = Color.Black;
-            btn.Appearance.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            btn.Appearance.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             btn.ButtonStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder;
-
             if (isClose)
             {
                 btn.MouseEnter += (s, e) => { btn.Appearance.BackColor = Color.Crimson; btn.Appearance.ForeColor = Color.White; };

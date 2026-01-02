@@ -34,16 +34,16 @@ namespace OfisAsistan.Models
         public TaskPriority Priority { get; set; }
 
         [JsonProperty("department_id")]
-        public int DepartmentId { get; set; }
+        public int? DepartmentId { get; set; } // Nullable - veritabanında null olabilir
 
         [JsonProperty("skills_required")]
         public string SkillsRequired { get; set; } // JSON formatında yetenek listesi
 
         [JsonProperty("estimated_hours")]
-        public int EstimatedHours { get; set; }
+        public int? EstimatedHours { get; set; } // Nullable
 
         [JsonProperty("actual_hours")]
-        public int ActualHours { get; set; }
+        public int? ActualHours { get; set; } // Nullable
 
         [JsonProperty("completed_date")]
         public DateTime? CompletedDate { get; set; }

@@ -382,11 +382,24 @@ namespace OfisAsistan.Services
         // --- 6. AKILLI GÖREV BÖLÜCÜ (Task Breakdown) ---
         public async Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
         {
-            string systemPrompt = "Sen bir proje yöneticisisin. Verilen ana görevi mantıklı, yapılabilir küçük alt görevlere böl.";
+            // Görev açıklaması boşsa erken dön
+            if (string.IsNullOrWhiteSpace(taskDescription))
+            {
+                System.Diagnostics.Debug.WriteLine("BreakDownTaskAsync: Görev açıklaması boş!");
+                return new List<SubTask>();
+            }
+
+            System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync çağrıldı: {taskDescription.Substring(0, Math.Min(100, taskDescription.Length))}...");
+
+            string systemPrompt = "Sen deneyimli bir proje yöneticisisin. Verilen ana görevi mantıklı, yapılabilir küçük alt görevlere böl. Her görev için farklı ve yaratıcı adımlar öner.";
             string userPrompt = $@"
                 GÖREV TANIMI: {taskDescription}
                 
-                Bu görevi alt adımlara ayır ve her biri için tahmini saat (Hours) belirle.
+                BUGÜNÜN TARİHİ: {DateTime.Now:dd.MM.yyyy HH:mm}
+                
+                Bu görevi 5-10 arası alt adıma ayır ve her biri için tahmini saat (Hours) belirle.
+                Adımlar spesifik, ölçülebilir ve uygulanabilir olsun.
+                
                 JSON Formatı:
                 {{
                     ""steps"": [
@@ -395,7 +408,7 @@ namespace OfisAsistan.Services
                     ]
                 }}";
 
-            var response = await CallSingleShotAsync(systemPrompt, userPrompt, true);
+            var response = await CallSingleShotWithTempAsync(systemPrompt, userPrompt, 0.8); // Yüksek temperature
             var resultList = new List<SubTask>();
 
             if (!string.IsNullOrEmpty(response))
@@ -403,18 +416,97 @@ namespace OfisAsistan.Services
                 try
                 {
                     var obj = JObject.Parse(ExtractJson(response));
-                    foreach (var s in obj["steps"])
+                    if (obj["steps"] != null)
                     {
-                        resultList.Add(new SubTask
+                        foreach (var s in obj["steps"])
                         {
-                            Title = (string)s["Title"],
-                            EstimatedHours = (int)s["Hours"]
-                        });
+                            resultList.Add(new SubTask
+                            {
+                                Title = (string)s["Title"],
+                                EstimatedHours = (int)s["Hours"]
+                            });
+                        }
                     }
+                    System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync: {resultList.Count} alt görev oluşturuldu.");
                 }
-                catch { /* Sessizce başarısız ol, boş liste dön */ }
+                catch (Exception ex) 
+                { 
+                    System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync Parse Hatası: {ex.Message}"); 
+                }
             }
             return resultList;
+        }
+
+        // Temperature parametreli özel metod
+        private async Task<string> CallSingleShotWithTempAsync(string systemPrompt, string userPrompt, double temperature)
+        {
+            var messages = new[]
+            {
+                new { role = "system", content = systemPrompt + " Yanıtı SADECE geçerli bir JSON formatında ver. Başka açıklama yapma." },
+                new { role = "user", content = userPrompt }
+            };
+            return await SendRequestToAIWithTempAsync(messages, temperature);
+        }
+
+        // Temperature destekli istek metodu
+        private async Task<string> SendRequestToAIWithTempAsync(object messages, double temperature)
+        {
+            int maxRetries = Constants.AI_MAX_RETRIES;
+            int delay = Constants.AI_INITIAL_DELAY_MS;
+
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    string finalUrl = _baseApiUrl;
+                    if (finalUrl.Contains("groq.com"))
+                        finalUrl = "https://api.groq.com/openai/v1/chat/completions";
+                    else if (!finalUrl.EndsWith("/chat/completions"))
+                        finalUrl += "/v1/chat/completions";
+
+                    var requestBody = new
+                    {
+                        model = "llama-3.3-70b-versatile",
+                        messages = messages,
+                        temperature = temperature, // Dinamik temperature
+                        response_format = new { type = "json_object" }
+                    };
+
+                    var jsonContent = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+                    var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+                    _httpClient.DefaultRequestHeaders.Clear();
+                    _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+
+                    var response = await _httpClient.PostAsync(finalUrl, content);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        string err = await response.Content.ReadAsStringAsync();
+                        System.Diagnostics.Debug.WriteLine($"AI API Hatası ({response.StatusCode}): {err}");
+                        if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
+                        {
+                            await System.Threading.Tasks.Task.Delay(delay);
+                            delay *= 2;
+                            continue;
+                        }
+                        return null;
+                    }
+
+                    var responseJson = await response.Content.ReadAsStringAsync();
+                    if (string.IsNullOrEmpty(responseJson)) return null;
+
+                    dynamic result = JsonConvert.DeserializeObject(responseJson);
+                    return result?.choices?[0]?.message?.content?.ToString();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"AI Bağlantı Hatası (Deneme {i + 1}): {ex.Message}");
+                    if (i == maxRetries - 1) return null;
+                    await System.Threading.Tasks.Task.Delay(delay);
+                }
+            }
+            return null;
         }
 
         // --- 7. GÜNLÜK ÖZET (Smart Briefing) ---

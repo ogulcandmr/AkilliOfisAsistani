@@ -65,66 +65,18 @@ namespace OfisAsistan.Forms
             };
         }
 
-        // --- 1. KART GÖRÜNÜMÜ (HTML) ---
+        // --- 1. KART GÖRÜNÜMÜ (SADECE BAŞLIK - AÇIKLAMA AYRI) ---
         public class TaskDisplayItem
         {
             public AppTask Task { get; set; }
-
-            // Metni paragraf gibi formatla - TAM GÖSTER
-            private string FormatDescription(string text)
-            {
-                if (string.IsNullOrEmpty(text)) return "<color=#999999>Açıklama yok.</color>";
-                
-                // Tüm açıklamayı göster, kesme
-                string clean = text.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ").Trim();
-                
-                // Çok uzunsa sadece sonuna ... ekle
-                int maxLength = 300; // Daha uzun göster
-                if (clean.Length > maxLength)
-                {
-                    clean = clean.Substring(0, maxLength) + "...";
-                }
-                
-                // Kelimeleri bölmeden, doğal satır sonları ekle
-                StringBuilder sb = new StringBuilder();
-                string[] words = clean.Split(' ');
-                int lineLength = 0;
-                int maxLineLength = 60; // Satır başına maksimum karakter
-                
-                foreach (string word in words)
-                {
-                    if (lineLength + word.Length + 1 > maxLineLength && lineLength > 0)
-                    {
-                        sb.Append("<br>");
-                        lineLength = 0;
-                    }
-                    if (lineLength > 0)
-                    {
-                        sb.Append(" ");
-                        lineLength++;
-                    }
-                    sb.Append(word);
-                    lineLength += word.Length;
-                }
-                
-                return sb.ToString();
-            }
 
             public override string ToString()
             {
                 if (Task == null) return "Geçersiz görev";
                 
+                // SADECE BAŞLIK GÖSTER - Açıklama DrawItem event'inde çizilecek
                 string taskTitle = string.IsNullOrEmpty(Task.Title) ? "İsimsiz Görev" : Task.Title;
-                string pColor = Task.Priority.ToString() == "High" || Task.Priority.ToString() == "Critical" ? "red" : 
-                               (Task.Priority.ToString() == "Normal" ? "#E67E22" : "green");
-                string dateStr = Task.DueDate.HasValue ? Task.DueDate.Value.ToString("dd.MM.yyyy") : "-";
-                string desc = FormatDescription(Task.Description);
-                string priorityText = Task.Priority.ToString();
-
-                // AÇIKLAMA PARAGRAF GİBİ, TAM GÖSTER
-                return $"<size=13><b><color=#1F2937>{taskTitle}</color></b></size><br><br>" +
-                       $"<size=10><color=#4B5563>{desc}</color></size><br><br>" +
-                       $"<size=9><color={pColor}><b>● {priorityText}</b></color>  <color=#6B7280>📅 {dateStr}</color></size>";
+                return taskTitle;
             }
         }
 
@@ -161,8 +113,14 @@ namespace OfisAsistan.Forms
             var topBar = new Panel { Dock = DockStyle.Top, Height = 50, Margin = new Padding(0, 0, 0, 10) };
 
             // Pencere Kontrolleri (X, Kare, Alt Tire)
-            var pnlWinControls = new FlowLayoutPanel { Dock = DockStyle.Right, FlowDirection = FlowDirection.LeftToRight, Width = 120 };
-            var btnMin = CreateWindowBtn("_", (s, e) => this.WindowState = FormWindowState.Minimized);
+            var pnlWinControls = new FlowLayoutPanel { 
+                Dock = DockStyle.Right, 
+                FlowDirection = FlowDirection.LeftToRight, 
+                Width = 140, // Genişlik artırıldı
+                AutoSize = false,
+                WrapContents = false
+            };
+            var btnMin = CreateWindowBtn("─", (s, e) => this.WindowState = FormWindowState.Minimized);
             var btnMax = CreateWindowBtn("□", (s, e) => this.WindowState = (this.WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized));
             var btnClose = CreateWindowBtn("✕", (s, e) => this.Close(), true);
             pnlWinControls.Controls.AddRange(new Control[] { btnMin, btnMax, btnClose });
@@ -302,7 +260,7 @@ namespace OfisAsistan.Forms
                 {
                     taskInfo += $"\n\nTeslim Tarihi: {item.Task.DueDate.Value:dd.MM.yyyy}";
                 }
-                if (item.Task.EstimatedHours > 0)
+                if (item.Task.EstimatedHours.GetValueOrDefault() > 0)
                 {
                     taskInfo += $"\n\nTahmini Süre: {item.Task.EstimatedHours} saat";
                 }
@@ -370,15 +328,25 @@ namespace OfisAsistan.Forms
             catch { }
         }
 
+        // Son seçilen görev - AI parçalama için kritik
+        private TaskDisplayItem _lastSelectedItem = null;
+
         private void AttachListEvents(ListBoxControl list)
         {
             list.MouseDown += (s, e) => {
                 var index = list.IndexFromPoint(e.Location);
                 if (index != -1 && index < list.ItemCount)
                 {
+                    // DİĞER LİSTELERİN SEÇİMİNİ TEMİZLE
+                    ClearOtherListSelections(list);
+                    
                     list.SelectedIndex = index;
-                    list.Focus(); // ÖNEMLİ: Listeyi focus'la
-                    this.ActiveControl = list; // ActiveControl'ü güncelle
+                    list.Focus();
+                    this.ActiveControl = list;
+                    
+                    // Son seçilen görevi kaydet
+                    _lastSelectedItem = list.SelectedItem as TaskDisplayItem;
+                    
                     if (e.Button == MouseButtons.Right) taskPopupMenu.ShowPopup(list.PointToScreen(e.Location));
                     else if (e.Button == MouseButtons.Left) { draggedSourceList = list; list.DoDragDrop(list.SelectedItem, DragDropEffects.Move); }
                 }
@@ -388,22 +356,34 @@ namespace OfisAsistan.Forms
             list.Click += (s, e) => {
                 if (list.SelectedIndex >= 0)
                 {
+                    ClearOtherListSelections(list);
                     list.Focus();
                     this.ActiveControl = list;
+                    _lastSelectedItem = list.SelectedItem as TaskDisplayItem;
                 }
             };
             
-            // SelectedIndexChanged - seçim değiştiğinde focus'u güncelle
+            // SelectedIndexChanged - seçim değiştiğinde
             list.SelectedIndexChanged += (s, e) => {
                 if (list.SelectedIndex >= 0)
                 {
+                    ClearOtherListSelections(list);
                     list.Focus();
                     this.ActiveControl = list;
+                    _lastSelectedItem = list.SelectedItem as TaskDisplayItem;
                 }
             };
             list.DoubleClick += (s, e) => {
                 var item = GetSelectedTaskItem();
-                if (item != null) XtraMessageBox.Show(item.Task.Description, item.Task.Title);
+                if (item != null && item.Task != null) 
+                {
+                    var detailForm = new TaskDetailForm(_databaseService, item.Task.Id, _employeeId, "Çalışan");
+                    if (detailForm.ShowDialog() == DialogResult.OK)
+                    {
+                        // Görev güncellendiyse listeyi yenile
+                        _ = LoadDataAsync(); // Fire and forget
+                    }
+                }
             };
             list.DragOver += (s, e) => e.Effect = DragDropEffects.Move;
             list.DragDrop += async (s, e) => {
@@ -428,57 +408,50 @@ namespace OfisAsistan.Forms
             };
         }
 
+        // Diğer listelerin seçimini temizle
+        private void ClearOtherListSelections(ListBoxControl currentList)
+        {
+            if (currentList != lstPending && lstPending != null)
+                lstPending.SelectedIndex = -1;
+            if (currentList != lstInProgress && lstInProgress != null)
+                lstInProgress.SelectedIndex = -1;
+            if (currentList != lstCompleted && lstCompleted != null)
+                lstCompleted.SelectedIndex = -1;
+        }
+
         private TaskDisplayItem GetSelectedTaskItem()
         {
-            // Hangi liste FOCUS'ta kontrol et - bu en önemli
+            // Önce son seçilen görevi kontrol et - EN GÜVENİLİR
+            if (_lastSelectedItem != null && _lastSelectedItem.Task != null)
+            {
+                return _lastSelectedItem;
+            }
+            
+            // Hangi liste FOCUS'ta kontrol et
             Control focusedControl = this.ActiveControl;
             
-            // Focus kontrolü
-            if (focusedControl == lstPending || (lstPending.Focused && lstPending.SelectedIndex >= 0))
+            if (focusedControl == lstPending && lstPending.SelectedIndex >= 0)
             {
-                if (lstPending.SelectedIndex >= 0 && lstPending.SelectedIndex < lstPending.ItemCount)
-                {
-                    var item = lstPending.SelectedItem as TaskDisplayItem;
-                    if (item != null) return item;
-                }
+                return lstPending.SelectedItem as TaskDisplayItem;
             }
             
-            if (focusedControl == lstInProgress || (lstInProgress.Focused && lstInProgress.SelectedIndex >= 0))
+            if (focusedControl == lstInProgress && lstInProgress.SelectedIndex >= 0)
             {
-                if (lstInProgress.SelectedIndex >= 0 && lstInProgress.SelectedIndex < lstInProgress.ItemCount)
-                {
-                    var item = lstInProgress.SelectedItem as TaskDisplayItem;
-                    if (item != null) return item;
-                }
+                return lstInProgress.SelectedItem as TaskDisplayItem;
             }
             
-            if (focusedControl == lstCompleted || (lstCompleted.Focused && lstCompleted.SelectedIndex >= 0))
+            if (focusedControl == lstCompleted && lstCompleted.SelectedIndex >= 0)
             {
-                if (lstCompleted.SelectedIndex >= 0 && lstCompleted.SelectedIndex < lstCompleted.ItemCount)
-                {
-                    var item = lstCompleted.SelectedItem as TaskDisplayItem;
-                    if (item != null) return item;
-                }
+                return lstCompleted.SelectedItem as TaskDisplayItem;
             }
             
-            // Eğer focus yoksa, seçili olanı al
-            if (lstPending.SelectedIndex >= 0 && lstPending.SelectedIndex < lstPending.ItemCount)
-            {
-                var item = lstPending.SelectedItem as TaskDisplayItem;
-                if (item != null) return item;
-            }
-            
-            if (lstInProgress.SelectedIndex >= 0 && lstInProgress.SelectedIndex < lstInProgress.ItemCount)
-            {
-                var item = lstInProgress.SelectedItem as TaskDisplayItem;
-                if (item != null) return item;
-            }
-            
-            if (lstCompleted.SelectedIndex >= 0 && lstCompleted.SelectedIndex < lstCompleted.ItemCount)
-            {
-                var item = lstCompleted.SelectedItem as TaskDisplayItem;
-                if (item != null) return item;
-            }
+            // Herhangi bir seçili olan
+            if (lstPending.SelectedIndex >= 0)
+                return lstPending.SelectedItem as TaskDisplayItem;
+            if (lstInProgress.SelectedIndex >= 0)
+                return lstInProgress.SelectedItem as TaskDisplayItem;
+            if (lstCompleted.SelectedIndex >= 0)
+                return lstCompleted.SelectedItem as TaskDisplayItem;
             
             return null;
         }
@@ -499,8 +472,9 @@ namespace OfisAsistan.Forms
             txtChatInput.Text = ""; 
             txtChatInput.Enabled = false;
             
-            // Mesajı ekle
-            txtChatHistory.Text += $"Ben: {t}\n\n";
+            // Mesajı ekle - her mesaj ayrı satırda, aralarında boşluk
+            txtChatHistory.Text += $"Ben: {t}\r\n";
+            txtChatHistory.Text += "─────────────────────────\r\n";
             
             // Scroll'u en alta al
             txtChatHistory.SelectionStart = txtChatHistory.Text.Length;
@@ -509,7 +483,8 @@ namespace OfisAsistan.Forms
             try 
             { 
                 string aiResponse = await _aiService.ChatWithAssistantAsync(t);
-                txtChatHistory.Text += $"AI: {aiResponse}\n\n";
+                txtChatHistory.Text += $"AI: {aiResponse}\r\n";
+                txtChatHistory.Text += "═════════════════════════\r\n\r\n";
                 
                 // Tekrar scroll'u en alta al
                 txtChatHistory.SelectionStart = txtChatHistory.Text.Length;
@@ -517,7 +492,8 @@ namespace OfisAsistan.Forms
             }
             catch (Exception ex)
             {
-                txtChatHistory.Text += $"Hata: {ex.Message}\n\n";
+                txtChatHistory.Text += $"Hata: {ex.Message}\r\n";
+                txtChatHistory.Text += "═════════════════════════\r\n\r\n";
                 txtChatHistory.SelectionStart = txtChatHistory.Text.Length;
                 txtChatHistory.ScrollToCaret();
             }
@@ -529,21 +505,99 @@ namespace OfisAsistan.Forms
         }
 
         // --- TASARIM YARDIMCILARI ---
-        private ListBoxControl CreateKanbanList() => new ListBoxControl
+        private ListBoxControl CreateKanbanList()
         {
-            BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder,
-            Appearance = { 
-                Font = new Font("Segoe UI", 9), 
-                BackColor = Color.White, 
-                ForeColor = Color.Black
-            },
-            ItemHeight = 150, // Kart Yüksekliği (daha uzun açıklamalar için)
-            AllowHtmlDraw = DefaultBoolean.True,
-            Dock = DockStyle.Fill,
-            Padding = new Padding(8, 5, 8, 5)
-        };
+            var list = new ListBoxControl
+            {
+                BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder,
+                Appearance = { 
+                    Font = new Font("Segoe UI", 10), 
+                    BackColor = Color.White, 
+                    ForeColor = Color.Black
+                },
+                ItemHeight = 85, // Kart yüksekliği
+                AllowHtmlDraw = DefaultBoolean.False, // HTML kapatıldı - custom paint kullanacağız
+                Dock = DockStyle.Fill,
+                HotTrackItems = true
+            };
+            
+            // CUSTOM DRAW - Her kartı elle çiz
+            list.DrawItem += (sender, e) => 
+            {
+                var item = e.Item as TaskDisplayItem;
+                if (item == null || item.Task == null) return;
 
-        // Modern Kanban kolonu tasarımı - BAŞLIKLAR GÖRÜNÜR
+                var task = item.Task;
+                var bounds = e.Bounds;
+                var g = e.Graphics;
+                var listBox = sender as ListBoxControl;
+                
+                // Anti-aliasing
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                
+                // Arka plan - seçili mi kontrol et
+                bool isSelected = listBox != null && listBox.SelectedIndex == e.Index;
+                Color bgColor = isSelected 
+                    ? Color.FromArgb(238, 242, 255) 
+                    : Color.White;
+                using (var bgBrush = new SolidBrush(bgColor))
+                    g.FillRectangle(bgBrush, bounds);
+                
+                // Sol kenarda öncelik çizgisi
+                Color priorityColor = task.Priority == TaskPriority.High || task.Priority == TaskPriority.Critical 
+                    ? Color.FromArgb(239, 68, 68)  // Kırmızı
+                    : (task.Priority == TaskPriority.Normal ? Color.FromArgb(245, 158, 11) : Color.FromArgb(34, 197, 94)); // Turuncu / Yeşil
+                using (var priorityBrush = new SolidBrush(priorityColor))
+                    g.FillRectangle(priorityBrush, bounds.X, bounds.Y + 5, 4, bounds.Height - 10);
+                
+                int leftPadding = bounds.X + 12;
+                int textWidth = bounds.Width - 20;
+                
+                // BAŞLIK (Bold, büyük)
+                using (var titleFont = new Font("Segoe UI", 11, FontStyle.Bold))
+                using (var titleBrush = new SolidBrush(Color.FromArgb(31, 41, 55)))
+                {
+                    string title = task.Title ?? "İsimsiz Görev";
+                    if (title.Length > 35) title = title.Substring(0, 35) + "...";
+                    g.DrawString(title, titleFont, titleBrush, new RectangleF(leftPadding, bounds.Y + 8, textWidth, 20));
+                }
+                
+                // AÇIKLAMA (Normal, küçük, gri - BAŞLIĞIN ALTINDA)
+                using (var descFont = new Font("Segoe UI", 9))
+                using (var descBrush = new SolidBrush(Color.FromArgb(107, 114, 128)))
+                {
+                    string desc = task.Description ?? "Açıklama yok.";
+                    desc = desc.Replace("\r\n", " ").Replace("\n", " ").Trim();
+                    if (desc.Length > 60) desc = desc.Substring(0, 60) + "...";
+                    g.DrawString(desc, descFont, descBrush, new RectangleF(leftPadding, bounds.Y + 32, textWidth, 20));
+                }
+                
+                // ALT BİLGİ: Öncelik ve Tarih
+                using (var infoFont = new Font("Segoe UI", 8))
+                {
+                    // Öncelik badge
+                    string priorityText = $"● {task.Priority}";
+                    using (var priBrush = new SolidBrush(priorityColor))
+                        g.DrawString(priorityText, infoFont, priBrush, leftPadding, bounds.Y + 58);
+                    
+                    // Tarih
+                    string dateStr = task.DueDate.HasValue ? $"📅 {task.DueDate.Value:dd.MM.yyyy}" : "";
+                    using (var dateBrush = new SolidBrush(Color.FromArgb(156, 163, 175)))
+                        g.DrawString(dateStr, infoFont, dateBrush, leftPadding + 80, bounds.Y + 58);
+                }
+                
+                // Alt çizgi (ayırıcı)
+                using (var linePen = new Pen(Color.FromArgb(229, 231, 235), 1))
+                    g.DrawLine(linePen, bounds.X + 10, bounds.Bottom - 1, bounds.Right - 10, bounds.Bottom - 1);
+                
+                e.Handled = true; // Varsayılan çizimi engelle
+            };
+            
+            return list;
+        }
+
+        // Modern Kanban kolonu tasarımı - BAŞLIKLAR KESİNLİKLE GÖRÜNÜR
         private void AddGroupColumn(TableLayoutPanel parent, string title, Control list, int col, Color headerColor)
         {
             // Ana container
@@ -554,19 +608,25 @@ namespace OfisAsistan.Forms
                 BackColor = Color.Transparent
             };
 
-            // İç container - beyaz kart
-            var containerPanel = new Panel
+            // İç container - TableLayoutPanel kullanarak başlık ve listeyi ayır
+            var containerLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.White
+                RowCount = 2,
+                ColumnCount = 1,
+                BackColor = Color.White,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
             };
+            containerLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F)); // Başlık 50px
+            containerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // Liste geri kalan
 
             // BAŞLIK PANELİ - BÜYÜK VE BELİRGİN
             var headerPanel = new Panel
             {
-                Dock = DockStyle.Top,
-                Height = 50, // Daha büyük
+                Dock = DockStyle.Fill,
                 BackColor = headerColor,
+                Margin = new Padding(0),
                 Padding = new Padding(0)
             };
 
@@ -577,7 +637,7 @@ namespace OfisAsistan.Forms
                 Dock = DockStyle.Fill,
                 Appearance = 
                 {
-                    Font = new Font("Segoe UI", 12, FontStyle.Bold), // Daha büyük font
+                    Font = new Font("Segoe UI", 12, FontStyle.Bold),
                     ForeColor = Color.White,
                     BackColor = Color.Transparent,
                     TextOptions = 
@@ -588,17 +648,17 @@ namespace OfisAsistan.Forms
                 },
                 AutoSizeMode = LabelAutoSizeMode.None
             };
+            headerPanel.Controls.Add(titleLabel);
 
             // Liste kontrolü
             list.Dock = DockStyle.Fill;
             list.Margin = new Padding(0);
 
-            // EKLEME SIRASI: Önce liste, sonra başlık (Dock.Top üstte görünür)
-            headerPanel.Controls.Add(titleLabel);
-            containerPanel.Controls.Add(list);
-            containerPanel.Controls.Add(headerPanel); // En son eklenen üstte
-            outerPanel.Controls.Add(containerPanel);
-
+            // EKLEME SIRASI: Başlık üstte, liste altta
+            containerLayout.Controls.Add(headerPanel, 0, 0);
+            containerLayout.Controls.Add(list, 0, 1);
+            
+            outerPanel.Controls.Add(containerLayout);
             parent.Controls.Add(outerPanel, col, 0);
         }
 

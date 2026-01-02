@@ -99,17 +99,45 @@ namespace OfisAsistan.Services
                     return null;
                 }
 
-                var json = JsonConvert.SerializeObject(task);
+                // ID OLMADAN GÖNDER - Veritabanı otomatik ID üretecek
+                var payload = new
+                {
+                    title = task.Title,
+                    description = task.Description,
+                    assigned_to_id = task.AssignedToId > 0 ? task.AssignedToId : (int?)null,
+                    created_by_id = task.CreatedById > 0 ? task.CreatedById : 1,
+                    created_date = task.CreatedDate.ToString("yyyy-MM-ddTHH:mm:ss"),
+                    due_date = task.DueDate?.ToString("yyyy-MM-ddTHH:mm:ss"),
+                    status = (int)task.Status,
+                    priority = (int)task.Priority,
+                    department_id = task.DepartmentId,
+                    skills_required = task.SkillsRequired,
+                    estimated_hours = task.EstimatedHours ?? 8,
+                    actual_hours = task.ActualHours ?? 0,
+                    notes = task.Notes
+                };
+
+                var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+                System.Diagnostics.Debug.WriteLine($"CreateTaskAsync JSON: {json}");
+                
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{_supabaseUrl}/rest/v1/tasks");
-                request.Headers.Add("Prefer", "return=representation"); // Supabase'den objeyi geri iste
+                request.Headers.Add("Prefer", "return=representation");
                 request.Content = content;
 
                 var response = await _httpClient.SendAsync(request);
-                response.EnsureSuccessStatusCode();
+                
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorJson = await response.Content.ReadAsStringAsync();
+                    System.Diagnostics.Debug.WriteLine($"CreateTaskAsync Hata Yanıtı: {errorJson}");
+                    return null;
+                }
 
                 var responseJson = await response.Content.ReadAsStringAsync();
+                System.Diagnostics.Debug.WriteLine($"CreateTaskAsync Başarılı: {responseJson}");
+                
                 var createdTasks = JsonConvert.DeserializeObject<List<TaskModel>>(responseJson);
                 var createdTask = createdTasks?.FirstOrDefault();
 
@@ -175,6 +203,60 @@ namespace OfisAsistan.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"UpdateTaskAsync Genel Hata: {ex.Message}");
+                return false;
+            }
+        }
+
+        // --- GÖREV SİLME ---
+        public async System.Threading.Tasks.Task<bool> DeleteTaskAsync(int taskId)
+        {
+            try
+            {
+                if (taskId <= 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("DeleteTaskAsync: Geçersiz Task ID!");
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(_supabaseUrl))
+                {
+                    System.Diagnostics.Debug.WriteLine("DeleteTaskAsync: Supabase URL boş!");
+                    return false;
+                }
+
+                // Önce görevi bul (AssignedToId'yi workload güncellemesi için)
+                var task = (await GetTasksAsync()).FirstOrDefault(t => t.Id == taskId);
+                int? assignedToId = task?.AssignedToId;
+
+                // DELETE işlemi
+                var request = new HttpRequestMessage(HttpMethod.Delete, $"{_supabaseUrl}/rest/v1/tasks?id=eq.{taskId}");
+                var response = await _httpClient.SendAsync(request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    System.Diagnostics.Debug.WriteLine($"DeleteTaskAsync Hata: {errorContent}");
+                    return false;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"DeleteTaskAsync: Görev silindi (ID: {taskId})");
+
+                // Atanmış çalışanın iş yükünü güncelle
+                if (assignedToId.HasValue && assignedToId.Value > 0)
+                {
+                    await UpdateEmployeeWorkloadAsync(assignedToId.Value);
+                }
+
+                return true;
+            }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"DeleteTaskAsync HTTP Hatası: {ex.Message}");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"DeleteTaskAsync Genel Hata: {ex.Message}");
                 return false;
             }
         }
@@ -323,7 +405,7 @@ namespace OfisAsistan.Services
                 var tasks = await GetTasksAsync(employeeId);
                 var totalHours = tasks
                     .Where(t => t.Status != TaskStatusModel.Completed && t.Status != TaskStatusModel.Cancelled)
-                    .Sum(t => t.EstimatedHours);
+                    .Sum(t => t.EstimatedHours.GetValueOrDefault(0));
 
                 var payload = new { current_workload = totalHours };
                 var json = JsonConvert.SerializeObject(payload);

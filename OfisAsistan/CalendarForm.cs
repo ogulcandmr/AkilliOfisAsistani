@@ -84,7 +84,8 @@ namespace OfisAsistan.Forms
                 foreach (var t in tasks.Where(t => t != null))
                 {
                     DateTime end = t.DueDate ?? DateTime.Now;
-                    DateTime start = end.AddHours(-t.EstimatedHours > 0 ? -t.EstimatedHours : -2);
+                    int hours = t.EstimatedHours.GetValueOrDefault(2);
+                    DateTime start = end.AddHours(-hours);
 
                     // Appointment oluşturma
                     Appointment apt = schedulerStorage.CreateAppointment(AppointmentType.Normal);

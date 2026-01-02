@@ -240,6 +240,10 @@ namespace OfisAsistan.Forms
                 if (f.ShowDialog() == DialogResult.OK) { AddLog("Kullanıcı", "Yeni görev."); await LoadDataSafe(); }
             };
 
+            var btnDelete = CreateHeaderBtn("Görev Sil", "actions_deletelist.svg", false); // Silme butonu
+            btnDelete.Appearance.ForeColor = Color.FromArgb(220, 38, 38); // Kırmızı yazı
+            btnDelete.Click += async (s, e) => await DeleteSelectedTask();
+
             var btnLoad = CreateHeaderBtn("Yük Dengeleme (AI)", "outlook%20inspired/pivottable.svg", false);
             btnLoad.Click += async (s, e) => await RunSmartLoadBalancing();
 
@@ -248,6 +252,7 @@ namespace OfisAsistan.Forms
 
             toolbarPanel.Controls.Add(btnRefresh);
             toolbarPanel.Controls.Add(btnNew);
+            toolbarPanel.Controls.Add(btnDelete);
             toolbarPanel.Controls.Add(btnLoad);
             toolbarPanel.Controls.Add(btnRec);
 
@@ -543,7 +548,70 @@ namespace OfisAsistan.Forms
             var itemNudge = new ToolStripMenuItem("🔔 Personele Hatırlatma Gönder");
             itemNudge.Click += (s, e) => { var row = gvTasks.GetFocusedRow(); if (row == null) return; AddLog("Yönetici", $"Dürtme gönderildi: {((dynamic)row).BAŞLIK}"); };
             menu.Items.Add(itemNudge);
+            
+            var itemDelete = new ToolStripMenuItem("🗑️ Görevi Sil");
+            itemDelete.Click += async (s, e) => await DeleteSelectedTask();
+            menu.Items.Add(itemDelete);
+            
             gcTasks.ContextMenuStrip = menu;
+        }
+
+        // --- GÖREV SİLME ---
+        private async System.Threading.Tasks.Task DeleteSelectedTask()
+        {
+            int focusedRowHandle = gvTasks.FocusedRowHandle;
+            if (focusedRowHandle < 0)
+            {
+                XtraMessageBox.Show("Lütfen silmek istediğiniz görevi listeden seçin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            object idObj = gvTasks.GetRowCellValue(focusedRowHandle, "ID");
+            object titleObj = gvTasks.GetRowCellValue(focusedRowHandle, "BAŞLIK");
+
+            if (idObj == null)
+            {
+                XtraMessageBox.Show("Seçilen görevin ID'si okunamadı.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            int taskId = Convert.ToInt32(idObj);
+            string taskTitle = titleObj?.ToString() ?? "İsimsiz Görev";
+
+            // Onay iste
+            var result = XtraMessageBox.Show(
+                $"'{taskTitle}' adlı görevi silmek istediğinizden emin misiniz?\n\nBu işlem geri alınamaz!",
+                "Görev Silme Onayı",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                DefaultBoolean.False);
+
+            if (result != DialogResult.Yes) return;
+
+            try
+            {
+                this.Cursor = Cursors.WaitCursor;
+
+                bool success = await _db.DeleteTaskAsync(taskId);
+
+                this.Cursor = Cursors.Default;
+
+                if (success)
+                {
+                    AddLog("Sistem", $"Görev silindi: {taskTitle} (ID: {taskId})");
+                    XtraMessageBox.Show("Görev başarıyla silindi.", "Başarılı", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    await LoadDataSafe();
+                }
+                else
+                {
+                    XtraMessageBox.Show("Görev silinemedi. Lütfen tekrar deneyin.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Cursor = Cursors.Default;
+                XtraMessageBox.Show($"Hata oluştu: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         // --- MANAGER DASHBOARD İÇİN DÜZELTİLMİŞ METOT ---

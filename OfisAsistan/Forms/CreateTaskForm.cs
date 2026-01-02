@@ -183,35 +183,46 @@ namespace OfisAsistan.Forms
             try
             {
                 btnSave.Enabled = false;
+                btnSave.Text = "Kaydediliyor...";
 
                 var newTask = new TaskModel
                 {
                     Title = txtTitle.Text.Trim(),
                     Description = txtDescription.Text?.Trim(),
-                    AssignedToId = (lueEmployee.EditValue != null) ? Convert.ToInt32(lueEmployee.EditValue) : 0,
+                    AssignedToId = (lueEmployee.EditValue != null) ? Convert.ToInt32(lueEmployee.EditValue) : 1, // Varsayılan atama
                     Priority = (TaskPriority)cmbPriority.SelectedIndex,
                     DueDate = deDueDate.DateTime,
                     Status = TaskStatusModel.Pending,
                     CreatedDate = DateTime.Now,
-                    // Eğer giriş yapan kullanıcıyı biliyorsak buraya CreatedById de ekleyebiliriz
+                    CreatedById = 1, // Varsayılan oluşturucu (Yönetici)
+                    EstimatedHours = 8, // Varsayılan tahmini süre
                 };
+
+                System.Diagnostics.Debug.WriteLine($"CreateTask: {newTask.Title}, AssignedTo: {newTask.AssignedToId}");
 
                 var result = await _databaseService.CreateTaskAsync(newTask);
 
                 if (result != null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"Görev oluşturuldu: ID={result.Id}");
                     XtraMessageBox.Show("Görev başarıyla oluşturuldu.", "Ofis Asistan", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    this.DialogResult = DialogResult.OK; // Ana formun Grid'i yenilemesini sağlar
+                    this.DialogResult = DialogResult.OK;
                     this.Close();
+                }
+                else
+                {
+                    XtraMessageBox.Show("Görev oluşturulamadı. Lütfen tekrar deneyin.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
             catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"CreateTask Hata: {ex.Message}");
                 XtraMessageBox.Show("Hata oluştu: " + ex.Message, "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
                 btnSave.Enabled = true;
+                btnSave.Text = "GÖREVİ OLUŞTUR";
             }
         }
 

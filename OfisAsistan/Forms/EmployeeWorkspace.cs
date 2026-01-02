@@ -110,7 +110,7 @@ namespace OfisAsistan.Forms
             mainLayout.Controls.Add(contentPanel, 1, 0);
 
             // ÜST BAR
-            var topBar = new Panel { Dock = DockStyle.Top, Height = 50, Margin = new Padding(0, 0, 0, 10) };
+            var topBar = new Panel { Dock = DockStyle.Top, Height = 60, Margin = new Padding(0, 0, 0, 15) };
 
             // Pencere Kontrolleri (X, Kare, Alt Tire)
             var pnlWinControls = new FlowLayoutPanel { 
@@ -136,31 +136,45 @@ namespace OfisAsistan.Forms
             contentPanel.Controls.Add(topBar);
 
             // İÇERİK BÖLÜNMESİ
-            var splitLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 10, 0, 0) };
+            var splitLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 50, 0, 10) };
             splitLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55F)); // Kanban %55
             splitLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45F)); // Araçlar %45
             contentPanel.Controls.Add(splitLayout);
 
-            // A. KANBAN ALANI - Modern tasarım
-            var kanbanGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 0, 0, 15) };
+            // A. KANBAN ALANI - SIFIRDAN YENİDEN YAZILDI
+            var kanbanGrid = new TableLayoutPanel 
+            { 
+                Dock = DockStyle.Fill, 
+                ColumnCount = 3, 
+                RowCount = 1, 
+                Margin = new Padding(0, 20, 0, 15),
+                Padding = new Padding(8, 0, 8, 0)
+            };
             kanbanGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3F));
             kanbanGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3F));
             kanbanGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3F));
-            kanbanGrid.Padding = new Padding(5, 0, 5, 0);
 
+            // Listeleri oluştur
             lstPending = CreateKanbanList();
             lstInProgress = CreateKanbanList();
             lstCompleted = CreateKanbanList();
 
-            // Sütunları GroupControl ile ekliyoruz (Başlık sorunu kesin çözüm)
-            AddGroupColumn(kanbanGrid, "📋 BEKLEYENLER", lstPending, 0, Color.Orange);
-            AddGroupColumn(kanbanGrid, "💻 YÜRÜTÜLEN", lstInProgress, 1, Color.DodgerBlue);
-            AddGroupColumn(kanbanGrid, "✅ TAMAMLANAN", lstCompleted, 2, Color.SeaGreen);
+            // Kolon 1: BEKLEYENLER
+            var col1 = CreateKanbanColumn("BEKLEYENLER", lstPending, Color.Orange);
+            kanbanGrid.Controls.Add(col1, 0, 0);
+
+            // Kolon 2: YÜRÜTÜLEN
+            var col2 = CreateKanbanColumn("YÜRÜTÜLEN", lstInProgress, Color.DodgerBlue);
+            kanbanGrid.Controls.Add(col2, 1, 0);
+
+            // Kolon 3: TAMAMLANAN (son kolon, margin yok)
+            var col3 = CreateKanbanColumn("TAMAMLANAN", lstCompleted, Color.SeaGreen, false);
+            kanbanGrid.Controls.Add(col3, 2, 0);
 
             splitLayout.Controls.Add(kanbanGrid, 0, 0);
 
             // B. ARAÇLAR ALANI
-            var toolsGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
+            var toolsGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 10, 0, 0) };
             toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
             toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F));
             toolsGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
@@ -597,19 +611,19 @@ namespace OfisAsistan.Forms
             return list;
         }
 
-        // Modern Kanban kolonu tasarımı - BAŞLIKLAR KESİNLİKLE GÖRÜNÜR
-        private void AddGroupColumn(TableLayoutPanel parent, string title, Control list, int col, Color headerColor)
+        // Kanban kolonu oluştur - BASİT VE GARANTİLİ
+        private Panel CreateKanbanColumn(string title, ListBoxControl list, Color headerColor, bool hasRightMargin = true)
         {
-            // Ana container
-            var outerPanel = new Panel
+            // Ana panel
+            var columnPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Margin = new Padding(8, 0, 8, 0),
-                BackColor = Color.Transparent
+                BackColor = Color.White,
+                Margin = hasRightMargin ? new Padding(0, 0, 8, 0) : new Padding(0)
             };
 
-            // İç container - TableLayoutPanel kullanarak başlık ve listeyi ayır
-            var containerLayout = new TableLayoutPanel
+            // İç layout: Başlık + Liste
+            var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 RowCount = 2,
@@ -618,48 +632,31 @@ namespace OfisAsistan.Forms
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
-            containerLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F)); // Başlık 50px
-            containerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // Liste geri kalan
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55F)); // Başlık - daha kalın
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // Liste
 
-            // BAŞLIK PANELİ - BÜYÜK VE BELİRGİN
-            var headerPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = headerColor,
-                Margin = new Padding(0),
-                Padding = new Padding(0)
-            };
-
-            // Başlık label'ı - BÜYÜK YAZI
-            var titleLabel = new LabelControl
+            // BAŞLIK - NORMAL LABEL, KESİNLİKLE GÖRÜNÜR
+            var headerLabel = new Label
             {
                 Text = title,
                 Dock = DockStyle.Fill,
-                Appearance = 
-                {
-                    Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                    ForeColor = Color.White,
-                    BackColor = Color.Transparent,
-                    TextOptions = 
-                    {
-                        HAlignment = HorzAlignment.Center,
-                        VAlignment = VertAlignment.Center
-                    }
-                },
-                AutoSizeMode = LabelAutoSizeMode.None
+                BackColor = headerColor,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoSize = false,
+                Height = 55
             };
-            headerPanel.Controls.Add(titleLabel);
 
-            // Liste kontrolü
+            // Liste
             list.Dock = DockStyle.Fill;
-            list.Margin = new Padding(0);
 
-            // EKLEME SIRASI: Başlık üstte, liste altta
-            containerLayout.Controls.Add(headerPanel, 0, 0);
-            containerLayout.Controls.Add(list, 0, 1);
+            // Ekle
+            layout.Controls.Add(headerLabel, 0, 0);
+            layout.Controls.Add(list, 0, 1);
             
-            outerPanel.Controls.Add(containerLayout);
-            parent.Controls.Add(outerPanel, col, 0);
+            columnPanel.Controls.Add(layout);
+            return columnPanel;
         }
 
         private Panel CreateGroupPanel(string title)

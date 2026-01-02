@@ -34,10 +34,10 @@ namespace OfisAsistan
         private void InitializeServices()
         {
             // Çevresel değişkenleri veya varsayılanları al
-            var supabaseUrl = Environment.GetEnvironmentVariable("SUPABASE_URL") ?? System.Configuration.ConfigurationManager.AppSettings["SupabaseUrl"] ?? "https://your-project.supabase.co";
-            var supabaseKey = Environment.GetEnvironmentVariable("SUPABASE_KEY") ?? System.Configuration.ConfigurationManager.AppSettings["SupabaseKey"] ?? "your-key";
-            var openAIApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY") ?? System.Configuration.ConfigurationManager.AppSettings["OpenAIApiKey"] ?? "your-key";
-            var openAIUrl = Environment.GetEnvironmentVariable("GROQ_API_URL") ?? System.Configuration.ConfigurationManager.AppSettings["OpenAIUrl"] ?? "https://api.openai.com";
+            var supabaseUrl = Environment.GetEnvironmentVariable(Constants.ENV_SUPABASE_URL) ?? System.Configuration.ConfigurationManager.AppSettings["SupabaseUrl"] ?? "https://your-project.supabase.co";
+            var supabaseKey = Environment.GetEnvironmentVariable(Constants.ENV_SUPABASE_KEY) ?? System.Configuration.ConfigurationManager.AppSettings["SupabaseKey"] ?? "your-key";
+            var openAIApiKey = Environment.GetEnvironmentVariable(Constants.ENV_GROQ_API_KEY) ?? System.Configuration.ConfigurationManager.AppSettings["OpenAIApiKey"] ?? "your-key";
+            var openAIUrl = Environment.GetEnvironmentVariable(Constants.ENV_GROQ_API_URL) ?? System.Configuration.ConfigurationManager.AppSettings["OpenAIUrl"] ?? Constants.DEFAULT_GROQ_API_URL;
 
             // Servisleri başlat
             _databaseService = new DatabaseService(supabaseUrl, supabaseKey);

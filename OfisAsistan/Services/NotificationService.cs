@@ -19,6 +19,9 @@ namespace OfisAsistan.Services
         private List<int> _notifiedTaskIds;
         private List<int> _notifiedMeetingIds;
 
+        // Bildirim event'i - Manager panelinde dinlenecek
+        public event EventHandler<NotificationEventArgs> NotificationReceived;
+
         public NotificationService(DatabaseService databaseService)
         {
             _databaseService = databaseService;
@@ -27,30 +30,52 @@ namespace OfisAsistan.Services
             InitializeTimer();
         }
 
+        // Bildirim event argümanları
+        public class NotificationEventArgs : EventArgs
+        {
+            public string Title { get; set; }
+            public string Message { get; set; }
+            public bool IsUrgent { get; set; }
+            public DateTime Timestamp { get; set; }
+        }
+
         private void InitializeTimer()
         {
             _checkTimer = new System.Windows.Forms.Timer();
-            _checkTimer.Interval = 60000; // 1 dakika
-            _checkTimer.Tick += async (s, e) => await CheckTimer_Tick(s, e);
+            _checkTimer.Interval = Constants.NOTIFICATION_CHECK_INTERVAL_MS;
+            _checkTimer.Tick += (s, e) => 
+            {
+                // Async metodları fire-and-forget olarak çağırıyoruz
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    await CheckDeadlinesAsync();
+                    await CheckMeetingsAsync();
+                });
+            };
             _checkTimer.Start();
-        }
-
-        private async System.Threading.Tasks.Task CheckTimer_Tick(object sender, EventArgs e)
-        {
-            await CheckDeadlinesAsync();
-            await CheckMeetingsAsync();
         }
 
         private async System.Threading.Tasks.Task CheckDeadlinesAsync()
         {
             try
             {
+                if (_databaseService == null)
+                {
+                    return;
+                }
+
                 var tasks = await _databaseService.GetTasksAsync();
+                if (tasks == null || !tasks.Any())
+                {
+                    return;
+                }
+
                 var now = DateTime.Now;
                 var minDate = now.AddDays(-1);
                 var maxDate = now.AddDays(1);
 
                 foreach (var task in tasks.Where(t =>
+                    t != null &&
                     t.Status != TaskStatusEnum.Completed &&
                     t.DueDate.HasValue &&
                     t.DueDate.Value >= minDate &&
@@ -59,12 +84,13 @@ namespace OfisAsistan.Services
                 {
                     var timeRemaining = task.DueDate.Value - now;
 
-                    // 2 saat kala uyarı
-                    if (timeRemaining.TotalHours <= 2 && timeRemaining.TotalHours > 0)
+                    // Deadline yaklaşıyor uyarısı
+                    if (timeRemaining.TotalHours <= Constants.DEADLINE_WARNING_HOURS && timeRemaining.TotalHours > 0)
                     {
+                        string taskTitle = string.IsNullOrEmpty(task.Title) ? "İsimsiz Görev" : task.Title;
                         ShowNotification(
                             "⏳ Deadline Yaklaşıyor",
-                            $"{task.Title} görevinin teslim tarihi yaklaşıyor! ({timeRemaining.Hours} saat kaldı)",
+                            $"{taskTitle} görevinin teslim tarihi yaklaşıyor! ({timeRemaining.Hours} saat kaldı)",
                             task.Priority == TaskPriority.Critical || task.Priority == TaskPriority.High
                         );
                         _notifiedTaskIds.Add(task.Id);
@@ -72,9 +98,10 @@ namespace OfisAsistan.Services
                     // Gecikmiş görevler
                     else if (timeRemaining.TotalHours < 0)
                     {
+                        string taskTitle = string.IsNullOrEmpty(task.Title) ? "İsimsiz Görev" : task.Title;
                         ShowNotification(
                             "🚨 Gecikmiş Görev",
-                            $"{task.Title} görevi gecikmiş! ({Math.Abs(timeRemaining.Days)} gün)",
+                            $"{taskTitle} görevi gecikmiş! ({Math.Abs(timeRemaining.Days)} gün)",
                             true
                         );
                         _notifiedTaskIds.Add(task.Id);
@@ -91,22 +118,34 @@ namespace OfisAsistan.Services
         {
             try
             {
+                if (_databaseService == null)
+                {
+                    return;
+                }
+
                 // GetMeetingsAsync artık DatabaseService içinde mevcut
                 var meetings = await _databaseService.GetMeetingsAsync();
+                if (meetings == null || !meetings.Any())
+                {
+                    return;
+                }
+
                 var now = DateTime.Now;
 
                 foreach (var meeting in meetings.Where(m =>
+                    m != null &&
                     m.StartTime > now &&
                     !_notifiedMeetingIds.Contains(m.Id)))
                 {
                     var timeUntilMeeting = meeting.StartTime - now;
 
-                    // 15 dakika kala uyarı
-                    if (timeUntilMeeting.TotalMinutes <= 15 && timeUntilMeeting.TotalMinutes > 0)
+                    // Toplantı hatırlatması
+                    if (timeUntilMeeting.TotalMinutes <= Constants.MEETING_REMINDER_MINUTES && timeUntilMeeting.TotalMinutes > 0)
                     {
+                        string meetingTitle = string.IsNullOrEmpty(meeting.Title) ? "İsimsiz Toplantı" : meeting.Title;
                         ShowNotification(
                             "📅 Toplantı Hatırlatması",
-                            $"{meeting.Title} toplantısı {timeUntilMeeting.Minutes} dakika sonra başlayacak.",
+                            $"{meetingTitle} toplantısı {timeUntilMeeting.Minutes} dakika sonra başlayacak.",
                             false
                         );
                         _notifiedMeetingIds.Add(meeting.Id);
@@ -121,18 +160,25 @@ namespace OfisAsistan.Services
 
         private void ShowNotification(string title, string message, bool isUrgent)
         {
-            var form = Application.OpenForms.Cast<Form>().FirstOrDefault();
-            if (form != null && !form.IsDisposed && form.IsHandleCreated)
+            try
             {
-                form.Invoke(new Action(() =>
+                if (string.IsNullOrEmpty(title) || string.IsNullOrEmpty(message))
                 {
-                    XtraMessageBox.Show(
-                        message,
-                        title,
-                        MessageBoxButtons.OK,
-                        isUrgent ? MessageBoxIcon.Warning : MessageBoxIcon.Information
-                    );
-                }));
+                    return;
+                }
+
+                // Event'i tetikle - Manager panelinde dinlenecek
+                NotificationReceived?.Invoke(this, new NotificationEventArgs
+                {
+                    Title = title,
+                    Message = message,
+                    IsUrgent = isUrgent,
+                    Timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ShowNotification Genel Hatası: {ex.Message}");
             }
         }
 

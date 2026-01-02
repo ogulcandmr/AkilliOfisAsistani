@@ -90,7 +90,7 @@
       <HintPath>..\..\..\..\..\Program Files\DevExpress 25.1\Components\Bin\Framework\DevExpress.XtraScheduler.v25.1.Core.Desktop.dll</HintPath>
     </Reference>
     <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
-      <HintPath>packages\Newtonsoft.Json.13.0.4\lib\net45\Newtonsoft.Json.dll</HintPath>
+      <HintPath>..\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -120,6 +120,7 @@
     <Compile Include="Models\AIModels.cs" />
     <Compile Include="Models\TaskComment.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="Constants.cs" />
     <Compile Include="Models\Task.cs" />
     <Compile Include="Models\Employee.cs" />
     <Compile Include="Models\Department.cs" />

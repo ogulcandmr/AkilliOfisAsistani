@@ -32,7 +32,7 @@ namespace OfisAsistan.Services
             _databaseService = databaseService;
 
             _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(120); // Uzun işlemler için süre
+            _httpClient.Timeout = TimeSpan.FromSeconds(Constants.AI_TIMEOUT_SECONDS);
 
             // Sohbet geçmişini başlat ve sistem rolünü ata
             ResetChatHistory();
@@ -56,8 +56,21 @@ namespace OfisAsistan.Services
         /// </summary>
         public async Task<string> ChatWithAssistantAsync(string userMessage)
         {
+            if (string.IsNullOrWhiteSpace(userMessage))
+            {
+                return "Lütfen bir mesaj girin.";
+            }
+
             // Kullanıcı mesajını geçmişe ekle
             _chatHistory.Add(new { role = "user", content = userMessage });
+
+            // Chat geçmişi limitini kontrol et (sistem mesajı hariç)
+            if (_chatHistory.Count > Constants.MAX_CHAT_HISTORY + 1) // +1 sistem mesajı için
+            {
+                // En eski mesajları sil (sistem mesajı hariç)
+                var systemMessage = _chatHistory[0];
+                _chatHistory.RemoveRange(1, _chatHistory.Count - Constants.MAX_CHAT_HISTORY - 1);
+            }
 
             // API'ye tüm geçmişi gönder
             string aiResponse = await SendRequestToAIAsync(_chatHistory);
@@ -76,8 +89,8 @@ namespace OfisAsistan.Services
 
         private async Task<string> SendRequestToAIAsync(object messages, bool jsonMode = false)
         {
-            int maxRetries = 3; // Hata olursa 3 kere dene
-            int delay = 1000; // İlk bekleme 1 saniye
+            int maxRetries = Constants.AI_MAX_RETRIES;
+            int delay = Constants.AI_INITIAL_DELAY_MS;
 
             for (int i = 0; i < maxRetries; i++)
             {
@@ -123,8 +136,20 @@ namespace OfisAsistan.Services
                     }
 
                     var responseJson = await response.Content.ReadAsStringAsync();
+                    if (string.IsNullOrEmpty(responseJson))
+                    {
+                        System.Diagnostics.Debug.WriteLine("AI API: Boş yanıt alındı.");
+                        return null;
+                    }
+
                     dynamic result = JsonConvert.DeserializeObject(responseJson);
-                    return result?.choices?[0]?.message?.content;
+                    if (result?.choices == null || result.choices.Count == 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine("AI API: Choices boş veya null.");
+                        return null;
+                    }
+
+                    return result?.choices?[0]?.message?.content?.ToString();
                 }
                 catch (Exception ex)
                 {
@@ -170,8 +195,20 @@ namespace OfisAsistan.Services
         // --- 4. GELİŞMİŞ PERSONEL ÖNERİSİ ---
         public async Task<EmployeeRecommendation> RecommendEmployeeForTaskAsync(AppTask task)
         {
+            if (task == null)
+            {
+                System.Diagnostics.Debug.WriteLine("RecommendEmployeeForTaskAsync: Task null!");
+                return null;
+            }
+
+            if (_databaseService == null)
+            {
+                System.Diagnostics.Debug.WriteLine("RecommendEmployeeForTaskAsync: DatabaseService null!");
+                return null;
+            }
+
             var employees = await _databaseService.GetEmployeesAsync();
-            var activeEmployees = employees?.Where(e => e.IsActive).ToList();
+            var activeEmployees = employees?.Where(e => e != null && e.IsActive).ToList();
 
             if (activeEmployees == null || !activeEmployees.Any()) return null;
 
@@ -208,18 +245,31 @@ namespace OfisAsistan.Services
                 try
                 {
                     string json = ExtractJson(aiResponse);
-                    var obj = JObject.Parse(json);
-                    int selectedId = (int)obj["TargetId"];
-                    string reason = (string)obj["Reason"];
-
-                    var selectedEmp = activeEmployees.FirstOrDefault(e => e.Id == selectedId);
-                    if (selectedEmp != null)
+                    if (string.IsNullOrEmpty(json))
                     {
-                        return new EmployeeRecommendation
+                        System.Diagnostics.Debug.WriteLine("AI JSON çıkarılamadı.");
+                    }
+                    else
+                    {
+                        var obj = JObject.Parse(json);
+                        var targetIdToken = obj["TargetId"];
+                        var reasonToken = obj["Reason"];
+
+                        if (targetIdToken != null && reasonToken != null)
                         {
-                            RecommendedEmployee = selectedEmp,
-                            Reason = reason
-                        };
+                            int selectedId = targetIdToken.Value<int>();
+                            string reason = reasonToken.Value<string>() ?? "Neden belirtilmedi.";
+
+                            var selectedEmp = activeEmployees.FirstOrDefault(e => e != null && e.Id == selectedId);
+                            if (selectedEmp != null)
+                            {
+                                return new EmployeeRecommendation
+                                {
+                                    RecommendedEmployee = selectedEmp,
+                                    Reason = reason
+                                };
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -230,9 +280,15 @@ namespace OfisAsistan.Services
 
             // FALLBACK (Yedek Plan): AI başarısız olursa matematiksel hesap yap
             var fallback = activeEmployees
-                .OrderByDescending(e => task.SkillsRequired != null && e.Skills != null && e.Skills.Contains(task.SkillsRequired)) // Yetenek var mı?
+                .Where(e => e != null)
+                .OrderByDescending(e => !string.IsNullOrEmpty(task.SkillsRequired) && !string.IsNullOrEmpty(e.Skills) && e.Skills.Contains(task.SkillsRequired)) // Yetenek var mı?
                 .ThenBy(e => e.WorkloadPercentage) // Sonra iş yükü az olan
                 .FirstOrDefault();
+
+            if (fallback == null)
+            {
+                return null;
+            }
 
             return new EmployeeRecommendation
             {
@@ -261,7 +317,7 @@ namespace OfisAsistan.Services
                 Priority = t.Priority.ToString(),
                 AssignedPerson = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.FullName ?? "Atanmamış",
                 AssignedPersonWorkload = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.WorkloadPercentage ?? 0
-            }).Take(15).ToList(); // Token tasarrufu için max 15 görev
+            }).Take(Constants.AI_MAX_TASKS_FOR_ANALYSIS).ToList();
 
             string systemPrompt = "Sen bir Proje Denetçisisin. Projedeki riskleri, mantıksız atamaları ve gecikmeleri tespit et.";
             string userPrompt = $@"
@@ -364,18 +420,84 @@ namespace OfisAsistan.Services
         // --- 7. GÜNLÜK ÖZET (Smart Briefing) ---
         public async Task<string> GenerateDailyBriefingAsync(int employeeId)
         {
-            var tasks = await _databaseService.GetTasksAsync(employeeId);
-            var emp = (await _databaseService.GetEmployeesAsync()).FirstOrDefault(e => e.Id == employeeId);
+            try
+            {
+                var tasks = await _databaseService.GetTasksAsync(employeeId);
+                var employees = await _databaseService.GetEmployeesAsync();
+                var emp = employees?.FirstOrDefault(e => e != null && e.Id == employeeId);
 
-            if (!tasks.Any()) return $"Sayın {emp?.FullName}, şu an üzerinizde bekleyen görev bulunmuyor. İyi çalışmalar!";
+                if (tasks == null || !tasks.Any())
+                {
+                    return $"Merhaba {emp?.FullName ?? "Değerli Çalışan"}! 🎉\n\nBugün üzerinizde bekleyen görev bulunmuyor. İyi çalışmalar!";
+                }
 
-            string userPrompt = $@"
-                KULLANICI: {emp?.FullName}
-                GÖREVLERİ: {string.Join(", ", tasks.Where(t => t.Status != TaskStatusEnum.Completed).Select(t => $"{t.Title} ({t.Priority})"))}
+                var activeTasks = tasks.Where(t => t != null && t.Status != TaskStatusEnum.Completed && t.Status != TaskStatusEnum.Cancelled).ToList();
+                var overdueTasks = activeTasks.Where(t => t.DueDate.HasValue && t.DueDate.Value < DateTime.Now).ToList();
+                var todayTasks = activeTasks.Where(t => t.DueDate.HasValue && t.DueDate.Value.Date == DateTime.Now.Date).ToList();
+                var highPriorityTasks = activeTasks.Where(t => t.Priority == TaskPriority.High || t.Priority == TaskPriority.Critical).ToList();
+
+                if (!activeTasks.Any())
+                {
+                    return $"Merhaba {emp?.FullName ?? "Değerli Çalışan"}! 🎉\n\nTüm görevleriniz tamamlanmış görünüyor. Harika iş çıkardınız!";
+                }
+
+                string systemPrompt = @"Sen profesyonel ve motive edici bir ofis asistanısın. Kullanıcıya günlük brifing verirken:
+- Kısa, net ve anlaşılır ol
+- Acil ve önemli görevleri önceliklendir
+- Gecikmiş görevler varsa bunları vurgula
+- Motive edici ve pozitif bir dil kullan
+- Maksimum 4-5 cümle kullan
+- Türkçe yaz";
+
+                string taskDetails = "";
+                if (overdueTasks.Any())
+                {
+                    taskDetails += $"⚠️ GECİKMİŞ GÖREVLER ({overdueTasks.Count}): {string.Join(", ", overdueTasks.Select(t => t.Title))}\n";
+                }
+                if (todayTasks.Any())
+                {
+                    taskDetails += $"📅 BUGÜN TESLİM ({todayTasks.Count}): {string.Join(", ", todayTasks.Select(t => t.Title))}\n";
+                }
+                if (highPriorityTasks.Any())
+                {
+                    taskDetails += $"🔥 YÜKSEK ÖNCELİK ({highPriorityTasks.Count}): {string.Join(", ", highPriorityTasks.Select(t => t.Title))}\n";
+                }
+                taskDetails += $"📋 TOPLAM AKTİF GÖREV: {activeTasks.Count}";
+
+                string userPrompt = $@"
+KULLANICI: {emp?.FullName ?? "Çalışan"}
+TOPLAM AKTİF GÖREV: {activeTasks.Count}
+
+GÖREV DETAYLARI:
+{taskDetails}
+
+Lütfen bu kullanıcıya profesyonel, motive edici ve kısa bir günlük brifing ver. Gecikmiş görevler varsa bunları özellikle vurgula.";
+
+                var response = await CallSingleShotAsync(systemPrompt, userPrompt);
                 
-                Bu kullanıcıya sabah brifingi ver. Motive edici ol, acil işleri vurgula. (Maksimum 3 cümle)";
+                if (string.IsNullOrEmpty(response))
+                {
+                    // Fallback: Basit bir özet
+                    var summary = $"Merhaba {emp?.FullName ?? "Değerli Çalışan"}! 👋\n\n";
+                    if (overdueTasks.Any())
+                    {
+                        summary += $"⚠️ {overdueTasks.Count} gecikmiş göreviniz var. Lütfen öncelik verin.\n";
+                    }
+                    if (todayTasks.Any())
+                    {
+                        summary += $"📅 Bugün {todayTasks.Count} görevinizin teslim tarihi var.\n";
+                    }
+                    summary += $"📋 Toplam {activeTasks.Count} aktif göreviniz bulunuyor.\n\nİyi çalışmalar! 💪";
+                    return summary;
+                }
 
-            return await CallSingleShotAsync("Sen kişisel bir asistansın.", userPrompt) ?? "Özet oluşturulamadı.";
+                return response;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"GenerateDailyBriefingAsync Error: {ex.Message}");
+                return "Brifing oluşturulurken bir hata oluştu. Lütfen daha sonra tekrar deneyin.";
+            }
         }
 
     }

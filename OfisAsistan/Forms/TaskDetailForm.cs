@@ -219,25 +219,60 @@ namespace OfisAsistan.Forms
         {
             try
             {
-                var tasks = await _databaseService.GetTasksAsync();
-                _task = tasks.FirstOrDefault(t => t.Id == _taskId);
+                if (_databaseService == null)
+                {
+                    XtraMessageBox.Show("Veritabanı servisi bulunamadı.", "Hata");
+                    Close();
+                    return;
+                }
 
-                if (_task == null) { Close(); return; }
+                var tasks = await _databaseService.GetTasksAsync();
+                if (tasks == null)
+                {
+                    XtraMessageBox.Show("Görevler yüklenemedi.", "Hata");
+                    Close();
+                    return;
+                }
+
+                _task = tasks.FirstOrDefault(t => t != null && t.Id == _taskId);
+
+                if (_task == null) 
+                { 
+                    XtraMessageBox.Show("Görev bulunamadı.", "Bilgi");
+                    Close(); 
+                    return; 
+                }
 
                 // UI Güncelleme (Invoke gerekebilir eğer thread farklıysa ama Load eventinde genelde gerekmez)
-                txtTitle.Text = _task.Title;
-                txtDescription.Text = _task.Description;
-                cmbStatus.SelectedItem = _task.Status.ToString();
-                cmbPriority.SelectedItem = _task.Priority.ToString();
-                deDueDate.DateTime = _task.DueDate ?? DateTime.Now;
+                if (txtTitle != null) txtTitle.Text = _task.Title ?? string.Empty;
+                if (txtDescription != null) txtDescription.Text = _task.Description ?? string.Empty;
+                
+                if (cmbStatus != null)
+                {
+                    var statusStr = _task.Status.ToString();
+                    var statusItem = cmbStatus.Properties.Items.Cast<string>().FirstOrDefault(s => s == statusStr);
+                    if (statusItem != null) cmbStatus.SelectedItem = statusItem;
+                }
+                
+                if (cmbPriority != null)
+                {
+                    var priorityStr = _task.Priority.ToString();
+                    var priorityItem = cmbPriority.Properties.Items.Cast<string>().FirstOrDefault(p => p == priorityStr);
+                    if (priorityItem != null) cmbPriority.SelectedItem = priorityItem;
+                }
+                
+                if (deDueDate != null) deDueDate.DateTime = _task.DueDate ?? DateTime.Now;
 
                 var employees = await _databaseService.GetEmployeesForEmployeeRoleAsync();
-                lueEmployee.Properties.DataSource = employees;
-                lueEmployee.EditValue = _task.AssignedToId;
+                if (lueEmployee != null && employees != null)
+                {
+                    lueEmployee.Properties.DataSource = employees;
+                    lueEmployee.EditValue = _task.AssignedToId;
+                }
             }
             catch (Exception ex)
             {
-                XtraMessageBox.Show("Veri yüklenirken hata: " + ex.Message);
+                XtraMessageBox.Show("Veri yüklenirken hata: " + ex.Message, "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -265,19 +300,58 @@ namespace OfisAsistan.Forms
 
         private async void BtnSave_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtTitle.Text)) return;
+            if (txtTitle == null || string.IsNullOrWhiteSpace(txtTitle.Text))
+            {
+                XtraMessageBox.Show("Görev başlığı boş olamaz.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_task == null)
+            {
+                XtraMessageBox.Show("Görev bilgisi bulunamadı.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (_databaseService == null)
+            {
+                XtraMessageBox.Show("Veritabanı servisi bulunamadı.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
             try
             {
-                btnSave.Enabled = false;
-                _task.Title = txtTitle.Text;
-                _task.Description = txtDescription.Text;
+                if (btnSave != null) btnSave.Enabled = false;
+                
+                _task.Title = txtTitle.Text.Trim();
+                _task.Description = txtDescription?.Text?.Trim() ?? string.Empty;
 
-                if (Enum.TryParse<TaskStatusEnum>(cmbStatus.SelectedItem?.ToString(), out var s)) _task.Status = s;
-                if (Enum.TryParse<TaskPriority>(cmbPriority.SelectedItem?.ToString(), out var p)) _task.Priority = p;
+                if (cmbStatus != null && cmbStatus.SelectedItem != null)
+                {
+                    string statusStr = cmbStatus.SelectedItem.ToString();
+                    if (Enum.TryParse<TaskStatusEnum>(statusStr, out var s))
+                    {
+                        _task.Status = s;
+                    }
+                }
 
-                _task.DueDate = deDueDate.DateTime;
-                _task.AssignedToId = (lueEmployee.EditValue != null) ? Convert.ToInt32(lueEmployee.EditValue) : 0;
+                if (cmbPriority != null && cmbPriority.SelectedItem != null)
+                {
+                    string priorityStr = cmbPriority.SelectedItem.ToString();
+                    if (Enum.TryParse<TaskPriority>(priorityStr, out var p))
+                    {
+                        _task.Priority = p;
+                    }
+                }
+
+                if (deDueDate != null)
+                {
+                    _task.DueDate = deDueDate.DateTime;
+                }
+
+                if (lueEmployee != null)
+                {
+                    _task.AssignedToId = (lueEmployee.EditValue != null) ? Convert.ToInt32(lueEmployee.EditValue) : 0;
+                }
 
                 if (await _databaseService.UpdateTaskAsync(_task))
                 {
@@ -292,11 +366,11 @@ namespace OfisAsistan.Forms
             }
             catch (Exception ex)
             {
-                XtraMessageBox.Show("Hata: " + ex.Message);
+                XtraMessageBox.Show("Hata: " + ex.Message, "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
-                btnSave.Enabled = true;
+                if (btnSave != null) btnSave.Enabled = true;
             }
         }
 

@@ -5,6 +5,7 @@ using OfisAsistan.Models;
 using OfisAsistan.Services;
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace OfisAsistan.Forms
@@ -31,6 +32,10 @@ namespace OfisAsistan.Forms
             this.StartPosition = FormStartPosition.CenterScreen;
 
             // DÜZELTME: SchedulerDataStorage kullanımı
+            if (this.components == null)
+            {
+                this.components = new System.ComponentModel.Container();
+            }
             schedulerStorage = new SchedulerDataStorage(this.components);
             schedulerControl = new SchedulerControl();
 
@@ -55,12 +60,28 @@ namespace OfisAsistan.Forms
         {
             try
             {
+                if (_db == null)
+                {
+                    MessageBox.Show("Veritabanı servisi bulunamadı.", "Hata");
+                    return;
+                }
+
+                if (schedulerStorage == null)
+                {
+                    MessageBox.Show("Takvim depolama alanı başlatılamadı.", "Hata");
+                    return;
+                }
+
                 var tasks = await _db.GetTasksAsync();
+                if (tasks == null || !tasks.Any())
+                {
+                    return;
+                }
 
                 // Appointments temizleme yöntemi değiştiyse diye try-catch içinde
                 try { schedulerStorage.Appointments.Clear(); } catch { }
 
-                foreach (var t in tasks)
+                foreach (var t in tasks.Where(t => t != null))
                 {
                     DateTime end = t.DueDate ?? DateTime.Now;
                     DateTime start = end.AddHours(-t.EstimatedHours > 0 ? -t.EstimatedHours : -2);
@@ -69,8 +90,8 @@ namespace OfisAsistan.Forms
                     Appointment apt = schedulerStorage.CreateAppointment(AppointmentType.Normal);
                     apt.Start = start;
                     apt.End = end;
-                    apt.Subject = $"{t.Title} ({t.Status})";
-                    apt.Description = t.Description;
+                    apt.Subject = $"{t.Title ?? "İsimsiz Görev"} ({t.Status})";
+                    apt.Description = t.Description ?? string.Empty;
                     apt.Location = t.Priority.ToString();
 
                     // Renklendirme (LabelId: 1=Kırmızı, 2=Mavi, 3=Yeşil genelde)
@@ -88,7 +109,7 @@ namespace OfisAsistan.Forms
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Takvim verileri yüklenirken hata: " + ex.Message);
+                MessageBox.Show("Takvim verileri yüklenirken hata: " + ex.Message, "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

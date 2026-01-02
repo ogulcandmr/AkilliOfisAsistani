@@ -28,6 +28,7 @@ namespace OfisAsistan.Forms
         private GridView gvTasks, gvEmployees;
         private ListBoxControl lstAnomalies;
         private ListBoxControl lstLiveLogs;
+        private ListBoxControl lstNotifications; // Bildirimler için
         private LabelControl[] statCards = new LabelControl[4];
 
         // Veri Önbelleği
@@ -57,8 +58,45 @@ namespace OfisAsistan.Forms
 
             SetupModernContainer();
             SetupDashboardLayout();
+            SetupNotificationHandler(); // Bildirim event handler'ını bağla
 
             this.Shown += async (s, e) => await LoadDataSafe();
+        }
+
+        private void SetupNotificationHandler()
+        {
+            if (_ns != null)
+            {
+                _ns.NotificationReceived += (sender, e) =>
+                {
+                    if (this.IsHandleCreated && !this.IsDisposed)
+                    {
+                        this.Invoke(new Action(() =>
+                        {
+                            AddNotification(e.Title, e.Message, e.IsUrgent);
+                        }));
+                    }
+                };
+            }
+        }
+
+        private void AddNotification(string title, string message, bool isUrgent)
+        {
+            if (lstNotifications == null) return;
+
+            string icon = isUrgent ? "🔴" : "🔵";
+            string displayText = $"[{DateTime.Now:HH:mm}] {icon} {title}: {message}";
+            
+            lstNotifications.Items.Insert(0, displayText);
+            
+            // Maksimum 20 bildirim tut
+            if (lstNotifications.Items.Count > 20)
+            {
+                lstNotifications.Items.RemoveAt(20);
+            }
+
+            // Yeni bildirim geldiğinde log'a da ekle
+            AddLog("Bildirim", $"{title}: {message}");
         }
 
         private void SetupModernContainer()
@@ -251,11 +289,12 @@ namespace OfisAsistan.Forms
             contentLayout.Controls.Add(cardsLayout, 0, 1);
 
             // --- 3. GRİDLER VE AI PANELİ ---
-            var gridLayout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2 };
+            var gridLayout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 2 };
             gridLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65F));
             gridLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35F));
-            gridLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 70F));
-            gridLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 30F));
+            gridLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F)); // Görevler ve Çalışanlar
+            gridLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25F)); // AI Bildirimleri
+            gridLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25F)); // Sistem Bildirimleri
 
             gcTasks = CreateStylishGrid(); gvTasks = (GridView)gcTasks.MainView;
             gcEmployees = CreateStylishGrid(); gvEmployees = (GridView)gcEmployees.MainView;
@@ -273,6 +312,16 @@ namespace OfisAsistan.Forms
                 ShowFocusRect = false
             };
 
+            // Bildirimler listesi
+            lstNotifications = new ListBoxControl
+            {
+                Appearance = { Font = new Font("Segoe UI", 9), BackColor = clrSurface, ForeColor = clrTextBody },
+                BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder,
+                ItemHeight = 35,
+                Dock = DockStyle.Fill,
+                ShowFocusRect = false
+            };
+
             AddContentToGrid(gridLayout, gcTasks, "AKTİF GÖREV LİSTESİ", 0, 0);
             AddContentToGrid(gridLayout, gcEmployees, "EKİP YÜKÜ (HEDEF)", 1, 0);
 
@@ -281,11 +330,29 @@ namespace OfisAsistan.Forms
             aiContainer.Controls.Add(lstAnomalies);
             aiContainer.Controls.Add(new LabelControl { Text = "⚠️  AI SİSTEM BİLDİRİMLERİ", Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 10), Appearance = { Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = clrTextBody } });
 
-            var pnlWrapperOuter = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 15, 0, 0) };
+            var pnlWrapperOuter = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 15, 0, 10) };
             pnlWrapperOuter.Controls.Add(aiContainer);
 
             gridLayout.Controls.Add(pnlWrapperOuter, 0, 1);
             gridLayout.SetColumnSpan(pnlWrapperOuter, 2);
+
+            // Bildirimler Panel Wrapper
+            var notificationContainer = new Panel { Dock = DockStyle.Fill, BackColor = clrSurface, Padding = new Padding(15) };
+            notificationContainer.Controls.Add(lstNotifications);
+            var lblNotifications = new LabelControl 
+            { 
+                Text = "🔔 SİSTEM BİLDİRİMLERİ", 
+                Dock = DockStyle.Top, 
+                Padding = new Padding(0, 0, 0, 10), 
+                Appearance = { Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = clrPrimary } 
+            };
+            notificationContainer.Controls.Add(lblNotifications);
+
+            var pnlNotificationWrapper = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 0) };
+            pnlNotificationWrapper.Controls.Add(notificationContainer);
+
+            gridLayout.Controls.Add(pnlNotificationWrapper, 0, 2);
+            gridLayout.SetColumnSpan(pnlNotificationWrapper, 2);
 
             contentLayout.Controls.Add(gridLayout, 0, 2);
         }
@@ -548,7 +615,7 @@ namespace OfisAsistan.Forms
             if (_employeesCache == null) return;
             var overloaded = _employeesCache.OrderByDescending(e => e.WorkloadPercentage).FirstOrDefault();
             var available = _employeesCache.OrderBy(e => e.WorkloadPercentage).FirstOrDefault();
-            if (overloaded != null && available != null && overloaded.WorkloadPercentage > 70 && available.WorkloadPercentage < 50)
+            if (overloaded != null && available != null && overloaded.WorkloadPercentage > Constants.WORKLOAD_OVERLOAD_THRESHOLD && available.WorkloadPercentage < Constants.WORKLOAD_AVAILABLE_THRESHOLD)
             {
                 if (XtraMessageBox.Show($"{overloaded.FullName} (%{overloaded.WorkloadPercentage}) üzerindeki yükü {available.FullName} kişisine aktarmak istiyor musunuz?", "AI Dengeleme", MessageBoxButtons.YesNo) == DialogResult.Yes)
                 {
@@ -566,9 +633,11 @@ namespace OfisAsistan.Forms
             IEnumerable<TaskModel> filtered = _allTasksCache;
             switch (cardIndex)
             {
-                case 1: filtered = _allTasksCache.Where(t => t.Status == OfisAsistan.Models.TaskStatus.Pending || t.Status == OfisAsistan.Models.TaskStatus.InProgress); break;
-                case 2: filtered = _allTasksCache.Where(t => t.DueDate < DateTime.Now && t.Status != OfisAsistan.Models.TaskStatus.Completed); break;
-                case 3: filtered = _allTasksCache.Where(t => t.Status == OfisAsistan.Models.TaskStatus.Completed); break;
+                case 0: filtered = _allTasksCache; break; // Tüm görevler
+                case 1: filtered = _allTasksCache.Where(t => t != null && (t.Status == OfisAsistan.Models.TaskStatus.Pending || t.Status == OfisAsistan.Models.TaskStatus.InProgress)); break;
+                case 2: filtered = _allTasksCache.Where(t => t != null && t.DueDate.HasValue && t.DueDate.Value < DateTime.Now && t.Status != OfisAsistan.Models.TaskStatus.Completed); break;
+                case 3: filtered = _allTasksCache.Where(t => t != null && t.Status == OfisAsistan.Models.TaskStatus.Completed); break;
+                default: filtered = _allTasksCache; break; // Varsayılan: tüm görevler
             }
             BindTasksToGrid(filtered.ToList());
             AddLog("Arayüz", $"Filtre Sonucu: {filtered.Count()}");
@@ -582,7 +651,7 @@ namespace OfisAsistan.Forms
 
         private string GetEmployeeName(int id) { var emp = _employeesCache?.FirstOrDefault(e => e.Id == id); return emp != null ? emp.FullName : "-"; }
 
-        private void AddLog(string actor, string message) { lstLiveLogs.Items.Insert(0, $"[{DateTime.Now:HH:mm}] {actor}: {message}"); if (lstLiveLogs.Items.Count > 50) lstLiveLogs.Items.RemoveAt(50); }
+        private void AddLog(string actor, string message) { lstLiveLogs.Items.Insert(0, $"[{DateTime.Now:HH:mm}] {actor}: {message}"); if (lstLiveLogs.Items.Count > Constants.MAX_LOG_ITEMS) lstLiveLogs.Items.RemoveAt(Constants.MAX_LOG_ITEMS); }
 
         private async System.Threading.Tasks.Task LoadDataSafe()
         {

@@ -24,21 +24,19 @@ namespace OfisAsistan
             // Not: Bilgisayarında "Sistem Ortam Değişkenleri"nde bu isimlerin birebir aynısı olmalı.
 
             // Supabase
-            string supabaseUrl = Environment.GetEnvironmentVariable("SUPABASE_URL");
-            string supabaseKey = Environment.GetEnvironmentVariable("SupabaseKey"); // Senin kodunda böyleydi, kontrol et
+            string supabaseUrl = Environment.GetEnvironmentVariable(Constants.ENV_SUPABASE_URL);
+            string supabaseKey = Environment.GetEnvironmentVariable(Constants.ENV_SUPABASE_KEY) ?? Environment.GetEnvironmentVariable("SupabaseKey"); // Geriye dönük uyumluluk
 
             // Groq AI
-            string aiApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY");
+            string aiApiKey = Environment.GetEnvironmentVariable(Constants.ENV_GROQ_API_KEY);
             // Eğer ortam değişkeninde URL yoksa varsayılanı kullan
-            string aiEndpoint = Environment.GetEnvironmentVariable("GROQ_API_URL") ?? "https://api.groq.com/openai/v1";
+            string aiEndpoint = Environment.GetEnvironmentVariable(Constants.ENV_GROQ_API_URL) ?? Constants.DEFAULT_GROQ_API_URL;
 
-            // --- GÜVENLİK KONTROLÜ (Kankam burası hayat kurtarır) ---
+            // --- GÜVENLİK KONTROLÜ ---
             if (string.IsNullOrEmpty(aiApiKey) || aiApiKey.StartsWith("BURAYA"))
             {
-                // Eğer key çekilemediyse elle girebileceğin bir alan veya uyarı:
-                // Test için buraya elle de yazabilirsin ama ortam değişkeni istiyorsan Visual Studio'yu yeniden başlatman gerekebilir.
-                // Şimdilik boşsa uyarı verelim ama devam edelim (uygulama çökmesin)
-                MessageBox.Show("DİKKAT: 'GROQ_API_KEY' ortam değişkeni okunamadı!\nAI özellikleri çalışmayabilir.\n\nÇözüm: Visual Studio'yu kapatıp açmayı dene.", "Anahtar Eksik", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                // Eğer key çekilemediyse uyarı verelim ama devam edelim (uygulama çökmesin)
+                MessageBox.Show($"DİKKAT: '{Constants.ENV_GROQ_API_KEY}' ortam değişkeni okunamadı!\nAI özellikleri çalışmayabilir.\n\nÇözüm: Visual Studio'yu kapatıp açmayı dene.", "Anahtar Eksik", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
             // =========================================================================

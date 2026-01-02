@@ -14,11 +14,12 @@ using TaskStatusModel = OfisAsistan.Models.TaskStatus;
 
 namespace OfisAsistan.Services
 {
-    public class DatabaseService
+    public class DatabaseService : IDisposable
     {
         private readonly string _supabaseUrl;
         private readonly string _supabaseKey;
         private readonly HttpClient _httpClient;
+        private bool _disposed = false;
 
         public DatabaseService(string supabaseUrl, string supabaseKey)
         {
@@ -29,12 +30,36 @@ namespace OfisAsistan.Services
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_supabaseKey}");
         }
 
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    _httpClient?.Dispose();
+                }
+                _disposed = true;
+            }
+        }
+
         // --- TASK (GÖREV) İŞLEMLERİ ---
 
         public async System.Threading.Tasks.Task<List<TaskModel>> GetTasksAsync(int? employeeId = null, TaskStatusModel? status = null)
         {
             try
             {
+                if (string.IsNullOrEmpty(_supabaseUrl))
+                {
+                    System.Diagnostics.Debug.WriteLine("GetTasksAsync: Supabase URL boş!");
+                    return new List<TaskModel>();
+                }
+
                 var url = $"{_supabaseUrl}/rest/v1/tasks?select=*";
                 if (employeeId.HasValue)
                     url += $"&assigned_to_id=eq.{employeeId}";
@@ -46,9 +71,14 @@ namespace OfisAsistan.Services
                 var json = await response.Content.ReadAsStringAsync();
                 return JsonConvert.DeserializeObject<List<TaskModel>>(json) ?? new List<TaskModel>();
             }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"GetTasksAsync HTTP Hatası: {ex.Message}");
+                return new List<TaskModel>();
+            }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"GetTasksAsync Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"GetTasksAsync Genel Hata: {ex.Message}");
                 return new List<TaskModel>();
             }
         }
@@ -57,6 +87,18 @@ namespace OfisAsistan.Services
         {
             try
             {
+                if (task == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("CreateTaskAsync: Task null!");
+                    return null;
+                }
+
+                if (string.IsNullOrEmpty(_supabaseUrl))
+                {
+                    System.Diagnostics.Debug.WriteLine("CreateTaskAsync: Supabase URL boş!");
+                    return null;
+                }
+
                 var json = JsonConvert.SerializeObject(task);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -77,9 +119,14 @@ namespace OfisAsistan.Services
                 }
                 return createdTask;
             }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"CreateTaskAsync HTTP Hatası: {ex.Message}");
+                return null;
+            }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"CreateTaskAsync Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"CreateTaskAsync Genel Hata: {ex.Message}");
                 return null;
             }
         }
@@ -88,6 +135,18 @@ namespace OfisAsistan.Services
         {
             try
             {
+                if (task == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("UpdateTaskAsync: Task null!");
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(_supabaseUrl))
+                {
+                    System.Diagnostics.Debug.WriteLine("UpdateTaskAsync: Supabase URL boş!");
+                    return false;
+                }
+
                 var json = JsonConvert.SerializeObject(task);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -108,9 +167,14 @@ namespace OfisAsistan.Services
 
                 return true;
             }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"UpdateTaskAsync HTTP Hatası: {ex.Message}");
+                return false;
+            }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"UpdateTaskAsync Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"UpdateTaskAsync Genel Hata: {ex.Message}");
                 return false;
             }
         }

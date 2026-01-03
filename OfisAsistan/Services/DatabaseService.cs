@@ -112,8 +112,8 @@ namespace OfisAsistan.Services
                     priority = (int)task.Priority,
                     department_id = task.DepartmentId,
                     skills_required = task.SkillsRequired,
-                    estimated_hours = task.EstimatedHours ?? 8,
-                    actual_hours = task.ActualHours ?? 0,
+                    estimated_hours = task.EstimatedHours.HasValue ? task.EstimatedHours.Value : 8,
+                    actual_hours = task.ActualHours.HasValue ? task.ActualHours.Value : 0,
                     notes = task.Notes
                 };
 

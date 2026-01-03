@@ -522,16 +522,16 @@ namespace OfisAsistan.Forms
         private ListBoxControl CreateKanbanList()
         {
             var list = new ListBoxControl
-            {
-                BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder,
-                Appearance = { 
+        {
+            BorderStyle = DevExpress.XtraEditors.Controls.BorderStyles.NoBorder,
+            Appearance = { 
                     Font = new Font("Segoe UI", 10), 
-                    BackColor = Color.White, 
-                    ForeColor = Color.Black
-                },
+                BackColor = Color.White, 
+                ForeColor = Color.Black
+            },
                 ItemHeight = 85, // Kart yüksekliği
                 AllowHtmlDraw = DefaultBoolean.False, // HTML kapatıldı - custom paint kullanacağız
-                Dock = DockStyle.Fill,
+            Dock = DockStyle.Fill,
                 HotTrackItems = true
             };
             
@@ -641,7 +641,7 @@ namespace OfisAsistan.Forms
                 Text = title,
                 Dock = DockStyle.Fill,
                 BackColor = headerColor,
-                ForeColor = Color.White,
+                    ForeColor = Color.White,
                 Font = new Font("Segoe UI", 12, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 AutoSize = false,

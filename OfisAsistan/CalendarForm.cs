@@ -1,4 +1,4 @@
-﻿using DevExpress.XtraScheduler;
+using DevExpress.XtraScheduler;
 using DevExpress.XtraScheduler.Drawing;
 using Microsoft.VisualBasic;
 using OfisAsistan.Models;

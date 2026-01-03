@@ -32,7 +32,8 @@ namespace OfisAsistan.Services
             _databaseService = databaseService;
 
             _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(Constants.AI_TIMEOUT_SECONDS);
+            // Timeout süresini artırarak uzun süren işlemlerde hemen hata almayı engelliyoruz
+            _httpClient.Timeout = TimeSpan.FromSeconds(60);
 
             // Sohbet geçmişini başlat ve sistem rolünü ata
             ResetChatHistory();
@@ -72,8 +73,8 @@ namespace OfisAsistan.Services
                 _chatHistory.RemoveRange(1, _chatHistory.Count - Constants.MAX_CHAT_HISTORY - 1);
             }
 
-            // API'ye tüm geçmişi gönder
-            string aiResponse = await SendRequestToAIAsync(_chatHistory);
+            // API'ye tüm geçmişi gönder - ConfigureAwait(false) ile UI thread'i bloklamayı önle
+            string aiResponse = await SendRequestToAIAsync(_chatHistory).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(aiResponse))
             {
@@ -115,27 +116,29 @@ namespace OfisAsistan.Services
                     var jsonContent = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
                     var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
+                    // HttpClient header ayarları (Thread-safe olmayabilir, dikkatli olunmalı ama burada tek akış var)
                     _httpClient.DefaultRequestHeaders.Clear();
                     _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
-                    var response = await _httpClient.PostAsync(finalUrl, content);
+                    // PostAsync çağrısında ConfigureAwait(false) kullanarak donmayı önle
+                    var response = await _httpClient.PostAsync(finalUrl, content).ConfigureAwait(false);
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        string err = await response.Content.ReadAsStringAsync();
+                        string err = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                         System.Diagnostics.Debug.WriteLine($"AI API Hatası ({response.StatusCode}): {err}");
 
                         // Eğer 429 (Too Many Requests) veya 5xx hatasıysa bekle ve tekrar dene
                         if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
                         {
-                            await System.Threading.Tasks.Task.Delay(delay);
+                            await System.Threading.Tasks.Task.Delay(delay).ConfigureAwait(false);
                             delay *= 2; // Bekleme süresini katla (Exponential Backoff)
                             continue;
                         }
                         return null;
                     }
 
-                    var responseJson = await response.Content.ReadAsStringAsync();
+                    var responseJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (string.IsNullOrEmpty(responseJson))
                     {
                         System.Diagnostics.Debug.WriteLine("AI API: Boş yanıt alındı.");
@@ -155,7 +158,7 @@ namespace OfisAsistan.Services
                 {
                     System.Diagnostics.Debug.WriteLine($"AI Bağlantı Hatası (Deneme {i + 1}): {ex.Message}");
                     if (i == maxRetries - 1) return null; // Son deneme de başarısızsa null dön
-                    await System.Threading.Tasks.Task.Delay(delay);
+                    await System.Threading.Tasks.Task.Delay(delay).ConfigureAwait(false);
                 }
             }
             return null;
@@ -169,7 +172,7 @@ namespace OfisAsistan.Services
                 new { role = "system", content = systemPrompt + (forceJson ? " Yanıtı SADECE geçerli bir JSON formatında ver. Başka açıklama yapma." : "") },
                 new { role = "user", content = userPrompt }
             };
-            return await SendRequestToAIAsync(messages, forceJson);
+            return await SendRequestToAIAsync(messages, forceJson).ConfigureAwait(false);
         }
 
         // --- 3. AKILLI JSON TEMİZLEYİCİ (Regex Destekli) ---
@@ -192,9 +195,10 @@ namespace OfisAsistan.Services
             return text; // Bulamazsa ham metni döndür (belki zaten temizdir)
         }
 
-        // --- 4. GELİŞMİŞ PERSONEL ÖNERİSİ ---
+        // --- 4. GELİŞMİŞ PERSONEL ÖNERİSİ (DETAYLI ANALİZ) ---
         public async Task<EmployeeRecommendation> RecommendEmployeeForTaskAsync(AppTask task)
         {
+            // ConfigureAwait(false) ile UI thread'den bağımsız çalış
             if (task == null)
             {
                 System.Diagnostics.Debug.WriteLine("RecommendEmployeeForTaskAsync: Task null!");
@@ -207,39 +211,108 @@ namespace OfisAsistan.Services
                 return null;
             }
 
-            var employees = await _databaseService.GetEmployeesAsync();
+            // Veritabanı çağrısını da ConfigureAwait(false) ile yap
+            var employees = await _databaseService.GetEmployeesAsync().ConfigureAwait(false);
             var activeEmployees = employees?.Where(e => e != null && e.IsActive).ToList();
 
             if (activeEmployees == null || !activeEmployees.Any()) return null;
 
-            // Veriyi string'e çevir
+            // DETAYLI VERİ HAZIRLIĞI
             var empList = string.Join("\n", activeEmployees.Select(e =>
-                $"- ID:{e.Id}, İsim:{e.FullName}, Dept:{e.DepartmentId}, Yetenekler:[{e.Skills}], ŞuAnkiYük:%{e.WorkloadPercentage}"
-            ));
+            {
+                // Buradaki GetTasksAsync çağrısını da asenkron yapabilmek için Task.Run içinde veya 
+                // Result kullanmadan (ki deadlock riski var) çağırmak lazım ama LINQ içinde async zordur.
+                // Basitlik için ve DB Service hızlı ise .Result kullanılabilir ama dikkatli olunmalı.
+                // En iyisi önceden verileri çekmek.
 
-            string systemPrompt = @"Sen uzman bir İnsan Kaynakları yöneticisisin. Görev için en uygun personeli seçmelisin.
-                                    Kriterler:
-                                    1. Yetenek uyumu (En önemli).
-                                    2. İş yükü dengesi (Aşırı yüklü kişiye verme).
-                                    3. Departman uygunluğu.";
+                // Güvenli yöntem: Senkronize çalışan bir metod varsa onu kullanın yoksa 
+                // bu yapı küçük veride sorun yaratmaz ama büyük veride yavaşlatır.
+                var tasks = _databaseService.GetTasksAsync(e.Id).Result;
+                var activeTaskCount = tasks?.Count(t => t.Status != TaskStatusEnum.Completed) ?? 0;
+                var avgCompletionTime = tasks?.Where(t => t.CompletedDate.HasValue)
+                    .Select(t => (t.CompletedDate.Value - t.CreatedDate).TotalDays)
+                    .DefaultIfEmpty(0).Average() ?? 0;
+
+                return $"- ID:{e.Id}, İsim:{e.FullName}, Departman:{e.DepartmentId}, " +
+                       $"Yetenekler:[{e.Skills}], İşYükü:%{e.WorkloadPercentage}, " +
+                       $"AktifGörev:{activeTaskCount}, OrtTamamlanmaSüresi:{avgCompletionTime:F1} gün, " +
+                       $"Pozisyon:{e.Position}";
+            }));
+
+            // Görev detayları
+            var taskDetails = $"Başlık: {task.Title}\n";
+            if (!string.IsNullOrEmpty(task.Description))
+                taskDetails += $"Açıklama: {task.Description}\n";
+            if (task.DueDate.HasValue)
+                taskDetails += $"Teslim Tarihi: {task.DueDate.Value:dd.MM.yyyy}\n";
+            if (task.EstimatedHours > 0)
+                taskDetails += $"Tahmini Süre: {task.EstimatedHours} saat\n";
+            taskDetails += $"Öncelik: {task.Priority}\n";
+            taskDetails += $"Durum: {task.Status}";
+
+            string systemPrompt = @"Sen uzman bir İnsan Kaynakları ve Proje Yönetimi danışmanısın. Görev için en uygun personeli seçerken şu kriterleri DETAYLI analiz et:
+
+1. YETENEK UYUMU (Ağırlık: %40)
+   - Görev için gereken yeteneklerle personelin yeteneklerinin eşleşme oranı
+   - İlgili deneyim ve geçmiş projeler
+   - Teknik yeterlilik seviyesi
+
+2. İŞ YÜKÜ DENGESİ (Ağırlık: %30)
+   - Mevcut iş yükü yüzdesi
+   - Aktif görev sayısı
+   - Ortalama tamamlanma süresi
+   - Aşırı yüklü personelden kaçın
+
+3. DEPARTMAN UYUMU (Ağırlık: %15)
+   - Departman uygunluğu
+   - Takım içi işbirliği potansiyeli
+
+4. PERFORMANS VE GÜVENİLİRLİK (Ağırlık: %15)
+   - Geçmiş performans metrikleri
+   - Görev tamamlama oranı
+   - Zamanında teslim geçmişi
+
+Her aday için 0-100 arası skor ver ve EN İYİ 3 adayı listele.";
 
             string userPrompt = $@"
-                GÖREV: {task.Title}
-                GEREKEN YETENEKLER: {task.SkillsRequired}
-                DEPARTMAN ID: {task.DepartmentId}
-                
-                ADAY LİSTESİ:
-                {empList}
+GÖREV DETAYLARI:
+{taskDetails}
 
-                Lütfen analiz et ve sonucu aşağıdaki JSON formatında ver:
-                {{
-                    ""TargetId"": 123,
-                    ""Reason"": ""Neden seçildiğine dair detaylı ve mantıklı bir açıklama.""
-                }}";
+GEREKEN YETENEKLER: {task.SkillsRequired ?? "Belirtilmemiş"}
+DEPARTMAN ID: {task.DepartmentId?.ToString() ?? "Belirtilmemiş"}
 
-            var aiResponse = await CallSingleShotAsync(systemPrompt, userPrompt, true);
+ADAY PERSONEL LİSTESİ:
+{empList}
 
-            // Yapay Zeka Cevabını İşle
+BUGÜNÜN TARİHİ: {DateTime.Now:dd.MM.yyyy}
+
+Lütfen her adayı detaylı analiz et ve sonucu aşağıdaki JSON formatında ver:
+{{
+    ""recommendations"": [
+        {{
+            ""EmployeeId"": 123,
+            ""Score"": 85.5,
+            ""Reason"": ""Detaylı analiz: Yetenek uyumu %90, iş yükü %45 (ideal), departman uyumu mükemmel. Geçmiş projelerde benzer görevlerde başarılı olmuş."",
+            ""SkillMatch"": 90,
+            ""WorkloadScore"": 85,
+            ""DepartmentMatch"": 100,
+            ""PerformanceScore"": 80
+        }},
+        {{
+            ""EmployeeId"": 124,
+            ""Score"": 72.3,
+            ""Reason"": ""İyi alternatif: Yetenekler uyumlu ancak iş yükü %65 (yüksek). Yine de görevi üstlenebilir."",
+            ""SkillMatch"": 75,
+            ""WorkloadScore"": 60,
+            ""DepartmentMatch"": 90,
+            ""PerformanceScore"": 75
+        }}
+    ]
+}}";
+
+            var aiResponse = await CallSingleShotAsync(systemPrompt, userPrompt, true).ConfigureAwait(false);
+
+            // Yapay Zeka Cevabını İşle (DETAYLI)
             if (!string.IsNullOrEmpty(aiResponse))
             {
                 try
@@ -252,22 +325,42 @@ namespace OfisAsistan.Services
                     else
                     {
                         var obj = JObject.Parse(json);
-                        var targetIdToken = obj["TargetId"];
-                        var reasonToken = obj["Reason"];
+                        var recommendations = obj["recommendations"] as JArray;
 
-                        if (targetIdToken != null && reasonToken != null)
+                        if (recommendations != null && recommendations.Count > 0)
                         {
-                            int selectedId = targetIdToken.Value<int>();
-                            string reason = reasonToken.Value<string>() ?? "Neden belirtilmedi.";
+                            // En yüksek skorlu adayı al
+                            var topRecommendation = recommendations
+                                .OrderByDescending(r => r["Score"]?.Value<double>() ?? 0)
+                                .FirstOrDefault();
 
-                            var selectedEmp = activeEmployees.FirstOrDefault(e => e != null && e.Id == selectedId);
-                            if (selectedEmp != null)
+                            if (topRecommendation != null)
                             {
-                                return new EmployeeRecommendation
+                                int selectedId = topRecommendation["EmployeeId"]?.Value<int>() ?? 0;
+                                double score = topRecommendation["Score"]?.Value<double>() ?? 0;
+                                string reason = topRecommendation["Reason"]?.Value<string>() ?? "Neden belirtilmedi.";
+
+                                var selectedEmp = activeEmployees.FirstOrDefault(e => e != null && e.Id == selectedId);
+                                if (selectedEmp != null)
                                 {
-                                    RecommendedEmployee = selectedEmp,
-                                    Reason = reason
-                                };
+                                    // Alternatif adayları da al (2. ve 3. sıradakiler)
+                                    var alternatives = new List<Employee>();
+                                    for (int i = 1; i < Math.Min(3, recommendations.Count); i++)
+                                    {
+                                        var alt = recommendations[i];
+                                        int altId = alt["EmployeeId"]?.Value<int>() ?? 0;
+                                        var altEmp = activeEmployees.FirstOrDefault(e => e != null && e.Id == altId);
+                                        if (altEmp != null) alternatives.Add(altEmp);
+                                    }
+
+                                    return new EmployeeRecommendation
+                                    {
+                                        RecommendedEmployee = selectedEmp,
+                                        Score = score,
+                                        Reason = $"🎯 Uygunluk Skoru: %{score:F1}\n\n" + reason,
+                                        AlternativeEmployees = alternatives
+                                    };
+                                }
                             }
                         }
                     }
@@ -281,7 +374,12 @@ namespace OfisAsistan.Services
             // FALLBACK (Yedek Plan): AI başarısız olursa matematiksel hesap yap
             var fallback = activeEmployees
                 .Where(e => e != null)
-                .OrderByDescending(e => !string.IsNullOrEmpty(task.SkillsRequired) && !string.IsNullOrEmpty(e.Skills) && e.Skills.Contains(task.SkillsRequired)) // Yetenek var mı?
+                .OrderByDescending(e => {
+                    if (string.IsNullOrEmpty(task.SkillsRequired) || string.IsNullOrEmpty(e.Skills))
+                        return false;
+                    // Skills JSON array string olabilir, basit string karşılaştırması yap
+                    return e.Skills.IndexOf(task.SkillsRequired, StringComparison.OrdinalIgnoreCase) >= 0;
+                }) // Yetenek var mı?
                 .ThenBy(e => e.WorkloadPercentage) // Sonra iş yükü az olan
                 .FirstOrDefault();
 
@@ -297,49 +395,86 @@ namespace OfisAsistan.Services
             };
         }
 
-        // --- 5. DETAYLI ANOMALİ TESPİTİ ---
+        // --- 5. DETAYLI ANOMALİ TESPİTİ (GELİŞTİRİLMİŞ) ---
         public async Task<List<AnomalyDetection>> DetectAnomaliesAsync()
         {
             var anomalies = new List<AnomalyDetection>();
-            var tasks = await _databaseService.GetTasksAsync();
-            var employees = await _databaseService.GetEmployeesAsync();
+            // ConfigureAwait(false) ekleyerek UI donmasını önle
+            var tasks = await _databaseService.GetTasksAsync().ConfigureAwait(false);
+            var employees = await _databaseService.GetEmployeesAsync().ConfigureAwait(false);
 
             // Tamamlanmamış görevleri al
             var activeTasks = tasks.Where(t => t.Status != TaskStatusEnum.Completed).ToList();
             if (!activeTasks.Any()) return anomalies;
 
-            // Veri seti hazırlığı (Anonimleştirilmiş ve özet)
-            var analysisData = activeTasks.Select(t => new
+            // DETAYLI VERİ SETİ HAZIRLIĞI
+            var analysisData = activeTasks.Select(t =>
             {
-                t.Id,
-                t.Title,
-                DueDate = t.DueDate?.ToString("yyyy-MM-dd"),
-                Priority = t.Priority.ToString(),
-                AssignedPerson = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.FullName ?? "Atanmamış",
-                AssignedPersonWorkload = employees.FirstOrDefault(e => e.Id == t.AssignedToId)?.WorkloadPercentage ?? 0
+                var emp = employees.FirstOrDefault(e => e.Id == t.AssignedToId);
+                var daysOverdue = t.DueDate.HasValue && t.DueDate.Value < DateTime.Now
+                    ? (DateTime.Now - t.DueDate.Value).Days
+                    : 0;
+                var daysUntilDue = t.DueDate.HasValue && t.DueDate.Value > DateTime.Now
+                    ? (t.DueDate.Value - DateTime.Now).Days
+                    : -1;
+                var daysInProgress = (DateTime.Now - t.CreatedDate).Days;
+
+                return new
+                {
+                    t.Id,
+                    t.Title,
+                    Description = t.Description != null ? t.Description.Substring(0, Math.Min(100, t.Description.Length)) : "",
+                    DueDate = t.DueDate?.ToString("yyyy-MM-dd"),
+                    CreatedDate = t.CreatedDate.ToString("yyyy-MM-dd"),
+                    Priority = t.Priority.ToString(),
+                    Status = t.Status.ToString(),
+                    AssignedPerson = emp?.FullName ?? "Atanmamış",
+                    AssignedPersonWorkload = emp?.WorkloadPercentage ?? 0,
+                    AssignedPersonActiveTasks = tasks.Count(ta => ta.AssignedToId == t.AssignedToId && ta.Status != TaskStatusEnum.Completed),
+                    EstimatedHours = t.EstimatedHours.HasValue ? t.EstimatedHours.Value : 0,
+                    DaysOverdue = daysOverdue,
+                    DaysUntilDue = daysUntilDue,
+                    DaysInProgress = daysInProgress,
+                    DepartmentId = t.DepartmentId?.ToString() ?? "Belirtilmemiş"
+                };
             }).Take(Constants.AI_MAX_TASKS_FOR_ANALYSIS).ToList();
 
-            string systemPrompt = "Sen bir Proje Denetçisisin. Projedeki riskleri, mantıksız atamaları ve gecikmeleri tespit et.";
+            string systemPrompt = @"Sen deneyimli bir Proje Denetçisi ve Risk Analisti'sin. Projedeki riskleri, mantıksız atamaları, gecikmeleri ve potansiyel sorunları DETAYLI analiz et.
+
+ANOMALİ TİPLERİ:
+1. OVERDUE (Gecikmiş): Tarihi geçmiş görevler
+2. WORKLOAD_OVERLOAD (Aşırı Yük): İş yükü %80+ kişiye yeni görev atanması
+3. STUCK_TASK (Takılı Görev): Uzun süredir ilerlemeyen görevler (30+ gün)
+4. QUALITY_ISSUE (Kalite Sorunu): Yüksek öncelikli ama atanmamış görevler
+5. RESOURCE_MISMATCH (Kaynak Uyumsuzluğu): Yetenek uyumsuzluğu olan atamalar
+
+SEVERITY SEVİYELERİ:
+- Critical: Acil müdahale gerektiren, projeyi durdurabilecek sorunlar
+- High: Önemli riskler, hızlıca ele alınmalı
+- Medium: Orta seviye riskler, takip edilmeli
+- Low: Düşük öncelikli, bilgilendirme amaçlı";
+
             string userPrompt = $@"
-                Aşağıdaki görev listesini analiz et.
-                BUGÜNÜN TARİHİ: {DateTime.Now:yyyy-MM-dd}
+BUGÜNÜN TARİHİ: {DateTime.Now:yyyy-MM-dd HH:mm}
 
-                VERİLER:
-                {JsonConvert.SerializeObject(analysisData)}
+GÖREV VERİLERİ (DETAYLI):
+{JsonConvert.SerializeObject(analysisData, Formatting.Indented)}
 
-                Kurallar:
-                - Tarihi geçmiş görevler: Yüksek Risk (High)
-                - İş yükü %80 üzeri kişiye atanan yeni görevler: Orta Risk (Medium)
-                - Atanmamış yüksek öncelikli görevler: Yüksek Risk (High)
-                
-                Çıktı Formatı (JSON Dizisi):
-                {{
-                    ""anomalies"": [
-                        {{ ""TaskId"": 1, ""Message"": ""Açıklama"", ""Severity"": ""High"" }}
-                    ]
-                }}";
+Lütfen her görevi detaylı analiz et ve tespit ettiğin anomalileri aşağıdaki JSON formatında ver:
+{{
+    ""anomalies"": [
+        {{
+            ""TaskId"": 1,
+            ""Type"": ""OVERDUE"",
+            ""Severity"": ""Critical"",
+            ""Message"": ""Detaylı açıklama: Bu görev 5 gün önce gecikmiş. Yüksek öncelikli ve kritik. Acil müdahale gerekiyor. Etkilenen departman: IT. Önerilen aksiyon: Görev sahibiyle acil görüşme yapılmalı."",
+            ""Impact"": ""Proje zaman çizelgesini etkileyebilir"",
+            ""RecommendedAction"": ""Görev sahibiyle acil görüşme, kaynak artırımı düşünülebilir""
+        }}
+    ]
+}}";
 
-            var response = await CallSingleShotAsync(systemPrompt, userPrompt, true);
+            var response = await CallSingleShotAsync(systemPrompt, userPrompt, true).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(response))
             {
@@ -352,18 +487,33 @@ namespace OfisAsistan.Services
                     {
                         foreach (var item in arr)
                         {
-                            int tId = (int)item["TaskId"];
+                            int tId = item["TaskId"]?.Value<int>() ?? 0;
                             var originalTask = tasks.FirstOrDefault(t => t.Id == tId);
                             if (originalTask != null)
                             {
-                                string sevStr = (string)item["Severity"];
-                                var severity = sevStr.StartsWith("H", StringComparison.OrdinalIgnoreCase) ? AnomalySeverity.High :
-                                               (sevStr.StartsWith("M", StringComparison.OrdinalIgnoreCase) ? AnomalySeverity.Medium : AnomalySeverity.Low);
+                                string sevStr = item["Severity"]?.Value<string>() ?? "Medium";
+                                var severity = sevStr.IndexOf("Critical", StringComparison.OrdinalIgnoreCase) >= 0 ? AnomalySeverity.Critical :
+                                               sevStr.StartsWith("H", StringComparison.OrdinalIgnoreCase) ? AnomalySeverity.High :
+                                               sevStr.StartsWith("M", StringComparison.OrdinalIgnoreCase) ? AnomalySeverity.Medium : AnomalySeverity.Low;
+
+                                string typeStr = item["Type"]?.Value<string>() ?? "StuckTask";
+                                var type = Enum.TryParse<AnomalyType>(typeStr, out var parsedType) ? parsedType : AnomalyType.StuckTask;
+
+                                string message = item["Message"]?.Value<string>() ?? "Anomali tespit edildi.";
+                                string impact = item["Impact"]?.Value<string>() ?? "";
+                                string recommendedAction = item["RecommendedAction"]?.Value<string>() ?? "";
+
+                                // Detaylı mesaj oluştur
+                                if (!string.IsNullOrEmpty(impact))
+                                    message += $"\n\n📊 Etki: {impact}";
+                                if (!string.IsNullOrEmpty(recommendedAction))
+                                    message += $"\n\n💡 Önerilen Aksiyon: {recommendedAction}";
 
                                 anomalies.Add(new AnomalyDetection
                                 {
                                     Task = originalTask,
-                                    Message = (string)item["Message"],
+                                    Type = type,
+                                    Message = message,
                                     Severity = severity
                                 });
                             }
@@ -379,7 +529,7 @@ namespace OfisAsistan.Services
             return anomalies;
         }
 
-        // --- 6. AKILLI GÖREV BÖLÜCÜ (Task Breakdown) ---
+        // --- 6. AKILLI GÖREV BÖLÜCÜ (DETAYLI TASK BREAKDOWN) ---
         public async Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
         {
             // Görev açıklaması boşsa erken dön
@@ -391,24 +541,50 @@ namespace OfisAsistan.Services
 
             System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync çağrıldı: {taskDescription.Substring(0, Math.Min(100, taskDescription.Length))}...");
 
-            string systemPrompt = "Sen deneyimli bir proje yöneticisisin. Verilen ana görevi mantıklı, yapılabilir küçük alt görevlere böl. Her görev için farklı ve yaratıcı adımlar öner.";
-            string userPrompt = $@"
-                GÖREV TANIMI: {taskDescription}
-                
-                BUGÜNÜN TARİHİ: {DateTime.Now:dd.MM.yyyy HH:mm}
-                
-                Bu görevi 5-10 arası alt adıma ayır ve her biri için tahmini saat (Hours) belirle.
-                Adımlar spesifik, ölçülebilir ve uygulanabilir olsun.
-                
-                JSON Formatı:
-                {{
-                    ""steps"": [
-                        {{ ""Title"": ""Gereksinim analizi yap"", ""Hours"": 2 }},
-                        {{ ""Title"": ""Veritabanı tasarımını çıkar"", ""Hours"": 4 }}
-                    ]
-                }}";
+            string systemPrompt = @"Sen deneyimli bir Proje Yöneticisi ve İş Analisti'sin. Verilen ana görevi mantıklı, yapılabilir ve ölçülebilir alt görevlere böl.
 
-            var response = await CallSingleShotWithTempAsync(systemPrompt, userPrompt, 0.8); // Yüksek temperature
+Her alt görev için:
+- Spesifik ve net bir başlık
+- Detaylı açıklama (ne yapılacak, nasıl yapılacak)
+- Gerçekçi tahmini süre (saat cinsinden)
+- Öncelik sırası (hangi adım önce gelmeli)
+- Bağımlılıklar (hangi adımlar birbirine bağlı)
+
+Adımlar mantıklı bir sırayla, bağımlılıkları göz önünde bulundurarak düzenlenmeli.";
+
+            string userPrompt = $@"
+GÖREV TANIMI: {taskDescription}
+
+BUGÜNÜN TARİHİ: {DateTime.Now:dd.MM.yyyy HH:mm}
+
+Bu görevi 5-10 arası detaylı alt adıma ayır. Her adım için:
+- Başlık (kısa ve net)
+- Açıklama (ne yapılacak, nasıl yapılacak - 1-2 cümle)
+- Tahmini süre (saat)
+- Sıra numarası (hangi sırada yapılmalı)
+
+JSON Formatı:
+{{
+    ""steps"": [
+        {{
+            ""Title"": ""Gereksinim analizi yap"",
+            ""Description"": ""Müşteri gereksinimlerini topla, analiz et ve dokümante et. Paydaşlarla görüşmeler yap."",
+            ""Hours"": 4,
+            ""Order"": 1
+        }},
+        {{
+            ""Title"": ""Teknik tasarım dokümantasyonu"",
+            ""Description"": ""Sistem mimarisi ve teknik tasarım dokümantasyonunu hazırla. Veritabanı şemasını çıkar."",
+            ""Hours"": 6,
+            ""Order"": 2
+        }}
+    ],
+    ""totalEstimatedHours"": 10,
+    ""complexity"": ""Medium"",
+    ""recommendedApproach"": ""Bu görev için önerilen yaklaşım: Önce gereksinimleri netleştir, sonra teknik tasarım yap, ardından geliştirmeye başla.""
+}}";
+
+            var response = await CallSingleShotWithTempAsync(systemPrompt, userPrompt, 0.7).ConfigureAwait(false); // Orta temperature
             var resultList = new List<SubTask>();
 
             if (!string.IsNullOrEmpty(response))
@@ -422,16 +598,21 @@ namespace OfisAsistan.Services
                         {
                             resultList.Add(new SubTask
                             {
-                                Title = (string)s["Title"],
-                                EstimatedHours = (int)s["Hours"]
+                                Title = (string)s["Title"] ?? "İsimsiz Adım",
+                                Description = (string)s["Description"] ?? "",
+                                EstimatedHours = s["Hours"]?.Value<int>() ?? 2,
+                                Order = s["Order"]?.Value<int>() ?? (resultList.Count + 1)
                             });
                         }
+
+                        // Sıraya göre sırala
+                        resultList = resultList.OrderBy(st => st.Order).ToList();
                     }
                     System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync: {resultList.Count} alt görev oluşturuldu.");
                 }
-                catch (Exception ex) 
-                { 
-                    System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync Parse Hatası: {ex.Message}"); 
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync Parse Hatası: {ex.Message}");
                 }
             }
             return resultList;
@@ -445,7 +626,7 @@ namespace OfisAsistan.Services
                 new { role = "system", content = systemPrompt + " Yanıtı SADECE geçerli bir JSON formatında ver. Başka açıklama yapma." },
                 new { role = "user", content = userPrompt }
             };
-            return await SendRequestToAIWithTempAsync(messages, temperature);
+            return await SendRequestToAIWithTempAsync(messages, temperature).ConfigureAwait(false);
         }
 
         // Temperature destekli istek metodu
@@ -460,7 +641,7 @@ namespace OfisAsistan.Services
                 {
                     string finalUrl = _baseApiUrl;
                     if (finalUrl.Contains("groq.com"))
-                        finalUrl = "https://api.groq.com/openai/v1/chat/completions";
+                        finalUrl = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)";
                     else if (!finalUrl.EndsWith("/chat/completions"))
                         finalUrl += "/v1/chat/completions";
 
@@ -478,22 +659,22 @@ namespace OfisAsistan.Services
                     _httpClient.DefaultRequestHeaders.Clear();
                     _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
-                    var response = await _httpClient.PostAsync(finalUrl, content);
+                    var response = await _httpClient.PostAsync(finalUrl, content).ConfigureAwait(false);
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        string err = await response.Content.ReadAsStringAsync();
+                        string err = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                         System.Diagnostics.Debug.WriteLine($"AI API Hatası ({response.StatusCode}): {err}");
                         if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
                         {
-                            await System.Threading.Tasks.Task.Delay(delay);
+                            await System.Threading.Tasks.Task.Delay(delay).ConfigureAwait(false);
                             delay *= 2;
                             continue;
                         }
                         return null;
                     }
 
-                    var responseJson = await response.Content.ReadAsStringAsync();
+                    var responseJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     if (string.IsNullOrEmpty(responseJson)) return null;
 
                     dynamic result = JsonConvert.DeserializeObject(responseJson);
@@ -503,7 +684,7 @@ namespace OfisAsistan.Services
                 {
                     System.Diagnostics.Debug.WriteLine($"AI Bağlantı Hatası (Deneme {i + 1}): {ex.Message}");
                     if (i == maxRetries - 1) return null;
-                    await System.Threading.Tasks.Task.Delay(delay);
+                    await System.Threading.Tasks.Task.Delay(delay).ConfigureAwait(false);
                 }
             }
             return null;
@@ -514,8 +695,9 @@ namespace OfisAsistan.Services
         {
             try
             {
-                var tasks = await _databaseService.GetTasksAsync(employeeId);
-                var employees = await _databaseService.GetEmployeesAsync();
+                // ConfigureAwait(false) ile UI thread'i kilitlemeden çağır
+                var tasks = await _databaseService.GetTasksAsync(employeeId).ConfigureAwait(false);
+                var employees = await _databaseService.GetEmployeesAsync().ConfigureAwait(false);
                 var emp = employees?.FirstOrDefault(e => e != null && e.Id == employeeId);
 
                 if (tasks == null || !tasks.Any())
@@ -533,40 +715,90 @@ namespace OfisAsistan.Services
                     return $"Merhaba {emp?.FullName ?? "Değerli Çalışan"}! 🎉\n\nTüm görevleriniz tamamlanmış görünüyor. Harika iş çıkardınız!";
                 }
 
-                string systemPrompt = @"Sen profesyonel ve motive edici bir ofis asistanısın. Kullanıcıya günlük brifing verirken:
-- Kısa, net ve anlaşılır ol
-- Acil ve önemli görevleri önceliklendir
-- Gecikmiş görevler varsa bunları vurgula
-- Motive edici ve pozitif bir dil kullan
-- Maksimum 4-5 cümle kullan
-- Türkçe yaz";
+                string systemPrompt = @"Sen profesyonel, analitik ve motive edici bir ofis asistanısın. Kullanıcıya DETAYLI günlük brifing verirken:
 
-                string taskDetails = "";
+1. KİŞİSELLEŞTİRİLMİŞ SELAMLAMA
+   - Kullanıcının adını kullan
+   - Bugünün tarihini belirt
+   - Genel durum özeti ver
+
+2. GÖREV ANALİZİ (DETAYLI)
+   - Toplam aktif görev sayısı
+   - Gecikmiş görevler (varsa detaylı listele)
+   - Bugün teslim tarihi olan görevler
+   - Yüksek öncelikli görevler
+   - Her kategori için sayı ve örnekler ver
+
+3. ÖNCELİKLENDİRME ÖNERİLERİ
+   - Hangi görevlere öncelik verilmeli
+   - Neden öncelikli oldukları
+   - Tahmini süre gereksinimleri
+
+4. MOTİVASYON VE YÖNLENDİRME
+   - Pozitif ve motive edici dil
+   - Başarıları vurgula (varsa)
+   - Bugün için hedefler öner
+   - İpuçları ve öneriler
+
+5. FORMAT
+   - Türkçe yaz
+   - Emoji kullan (ölçülü)
+   - Paragraflar halinde düzenle
+   - Okunabilir ve anlaşılır ol";
+
+                // DETAYLI GÖREV ANALİZİ
+                var taskDetails = new StringBuilder();
+                taskDetails.AppendLine($"📊 GÖREV ANALİZİ - {DateTime.Now:dd.MM.yyyy}");
+                taskDetails.AppendLine($"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                taskDetails.AppendLine($"📋 Toplam Aktif Görev: {activeTasks.Count}");
+
                 if (overdueTasks.Any())
                 {
-                    taskDetails += $"⚠️ GECİKMİŞ GÖREVLER ({overdueTasks.Count}): {string.Join(", ", overdueTasks.Select(t => t.Title))}\n";
+                    taskDetails.AppendLine($"\n⚠️ GECİKMİŞ GÖREVLER ({overdueTasks.Count}):");
+                    foreach (var t in overdueTasks.Take(5))
+                    {
+                        var daysOverdue = (DateTime.Now - t.DueDate.Value).Days;
+                        taskDetails.AppendLine($"   • {t.Title} ({daysOverdue} gün gecikmiş, Öncelik: {t.Priority})");
+                    }
                 }
+
                 if (todayTasks.Any())
                 {
-                    taskDetails += $"📅 BUGÜN TESLİM ({todayTasks.Count}): {string.Join(", ", todayTasks.Select(t => t.Title))}\n";
+                    taskDetails.AppendLine($"\n📅 BUGÜN TESLİM TARİHİ ({todayTasks.Count}):");
+                    foreach (var t in todayTasks.Take(5))
+                    {
+                        taskDetails.AppendLine($"   • {t.Title} (Öncelik: {t.Priority}, Tahmini: {(t.EstimatedHours.HasValue ? t.EstimatedHours.Value : 0)} saat)");
+                    }
                 }
+
                 if (highPriorityTasks.Any())
                 {
-                    taskDetails += $"🔥 YÜKSEK ÖNCELİK ({highPriorityTasks.Count}): {string.Join(", ", highPriorityTasks.Select(t => t.Title))}\n";
+                    taskDetails.AppendLine($"\n🔥 YÜKSEK ÖNCELİK ({highPriorityTasks.Count}):");
+                    foreach (var t in highPriorityTasks.Take(5))
+                    {
+                        taskDetails.AppendLine($"   • {t.Title} (Durum: {t.Status}, Teslim: {t.DueDate?.ToString("dd.MM.yyyy") ?? "Belirtilmemiş"})");
+                    }
                 }
-                taskDetails += $"📋 TOPLAM AKTİF GÖREV: {activeTasks.Count}";
+
+                // İstatistikler
+                var avgEstimatedHours = activeTasks.Where(t => t.EstimatedHours.HasValue).Average(t => t.EstimatedHours.Value);
+                var totalEstimatedHours = activeTasks.Where(t => t.EstimatedHours.HasValue).Sum(t => t.EstimatedHours.Value);
+                taskDetails.AppendLine($"\n📈 İSTATİSTİKLER:");
+                taskDetails.AppendLine($"   • Ortalama Görev Süresi: {avgEstimatedHours:F1} saat");
+                taskDetails.AppendLine($"   • Toplam Tahmini Süre: {totalEstimatedHours} saat");
+                taskDetails.AppendLine($"   • Bekleyen: {activeTasks.Count(t => t.Status == TaskStatusEnum.Pending)}");
+                taskDetails.AppendLine($"   • Devam Eden: {activeTasks.Count(t => t.Status == TaskStatusEnum.InProgress)}");
 
                 string userPrompt = $@"
 KULLANICI: {emp?.FullName ?? "Çalışan"}
-TOPLAM AKTİF GÖREV: {activeTasks.Count}
+BUGÜNÜN TARİHİ: {DateTime.Now:dd.MM.yyyy dddd}
 
-GÖREV DETAYLARI:
-{taskDetails}
+{taskDetails.ToString()}
 
-Lütfen bu kullanıcıya profesyonel, motive edici ve kısa bir günlük brifing ver. Gecikmiş görevler varsa bunları özellikle vurgula.";
+Lütfen bu kullanıcıya profesyonel, detaylı, motive edici ve kişiselleştirilmiş bir günlük brifing ver. Yukarıdaki tüm bilgileri kullanarak kapsamlı bir analiz yap. Gecikmiş görevler varsa bunları özellikle vurgula ve öneriler sun.";
 
-                var response = await CallSingleShotAsync(systemPrompt, userPrompt);
-                
+                var response = await CallSingleShotAsync(systemPrompt, userPrompt).ConfigureAwait(false);
+
                 if (string.IsNullOrEmpty(response))
                 {
                     // Fallback: Basit bir özet

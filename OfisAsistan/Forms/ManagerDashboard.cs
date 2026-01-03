@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Data;
 using System.Drawing;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using TaskModel = OfisAsistan.Models.Task; // Model alias
 using OfisAsistan.Models; // Enumlar
+using TaskStatusEnum = OfisAsistan.Models.TaskStatus; // TaskStatus alias
 using OfisAsistan.Services;
 using DevExpress.XtraEditors;
 using DevExpress.XtraGrid;
@@ -244,17 +246,17 @@ namespace OfisAsistan.Forms
             btnDelete.Appearance.ForeColor = Color.FromArgb(220, 38, 38); // Kırmızı yazı
             btnDelete.Click += async (s, e) => await DeleteSelectedTask();
 
-            var btnLoad = CreateHeaderBtn("Yük Dengeleme (AI)", "outlook%20inspired/pivottable.svg", false);
-            btnLoad.Click += async (s, e) => await RunSmartLoadBalancing();
-
             var btnRec = CreateHeaderBtn("AI Personel Önerisi", "actions_user.svg", false);
             btnRec.Click += async (s, e) => await RecommendEmployeeForSelectedTask();
+
+            var btnCharts = CreateHeaderBtn("📊 Grafikler", "outlook%20inspired/pivottable.svg", false);
+            btnCharts.Click += (s, e) => ShowChartsPanel();
 
             toolbarPanel.Controls.Add(btnRefresh);
             toolbarPanel.Controls.Add(btnNew);
             toolbarPanel.Controls.Add(btnDelete);
-            toolbarPanel.Controls.Add(btnLoad);
             toolbarPanel.Controls.Add(btnRec);
+            toolbarPanel.Controls.Add(btnCharts);
 
             contentLayout.Controls.Add(toolbarPanel, 0, 0);
 
@@ -678,21 +680,103 @@ namespace OfisAsistan.Forms
             }
         }
 
-        private async System.Threading.Tasks.Task RunSmartLoadBalancing()
+        // --- GRAFİKLER PANELİ ---
+        private void ShowChartsPanel()
         {
-            if (_employeesCache == null) return;
-            var overloaded = _employeesCache.OrderByDescending(e => e.WorkloadPercentage).FirstOrDefault();
-            var available = _employeesCache.OrderBy(e => e.WorkloadPercentage).FirstOrDefault();
-            if (overloaded != null && available != null && overloaded.WorkloadPercentage > Constants.WORKLOAD_OVERLOAD_THRESHOLD && available.WorkloadPercentage < Constants.WORKLOAD_AVAILABLE_THRESHOLD)
+            var chartsForm = new XtraForm
             {
-                if (XtraMessageBox.Show($"{overloaded.FullName} (%{overloaded.WorkloadPercentage}) üzerindeki yükü {available.FullName} kişisine aktarmak istiyor musunuz?", "AI Dengeleme", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                Text = "📊 Görev İstatistikleri ve Grafikler",
+                Size = new Size(1000, 700),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false
+            };
+
+            var mainLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(15) };
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+
+            // Grafik 1: Durum Dağılımı
+            var chart1Panel = CreateChartPanel("Görev Durum Dağılımı", () => {
+                if (_allTasksCache == null) return "";
+                var pending = _allTasksCache.Count(t => t.Status == TaskStatusEnum.Pending);
+                var inProgress = _allTasksCache.Count(t => t.Status == TaskStatusEnum.InProgress);
+                var completed = _allTasksCache.Count(t => t.Status == TaskStatusEnum.Completed);
+                return $"📋 Bekleyen: {pending}\n💻 Devam Eden: {inProgress}\n✅ Tamamlanan: {completed}";
+            });
+
+            // Grafik 2: Öncelik Dağılımı
+            var chart2Panel = CreateChartPanel("Öncelik Dağılımı", () => {
+                if (_allTasksCache == null) return "";
+                var low = _allTasksCache.Count(t => t.Priority == TaskPriority.Low);
+                var normal = _allTasksCache.Count(t => t.Priority == TaskPriority.Normal);
+                var high = _allTasksCache.Count(t => t.Priority == TaskPriority.High);
+                var critical = _allTasksCache.Count(t => t.Priority == TaskPriority.Critical);
+                return $"🟢 Düşük: {low}\n🟡 Normal: {normal}\n🟠 Yüksek: {high}\n🔴 Kritik: {critical}";
+            });
+
+            // Grafik 3: Çalışan İş Yükü
+            var chart3Panel = CreateChartPanel("Çalışan İş Yükü", () => {
+                if (_employeesCache == null) return "";
+                var sb = new StringBuilder();
+                foreach (var emp in _employeesCache.OrderByDescending(e => e.WorkloadPercentage).Take(5))
                 {
-                    var tasks = _allTasksCache.Where(t => t.AssignedToId == overloaded.Id && t.Status != OfisAsistan.Models.TaskStatus.Completed).Take(2).ToList();
-                    foreach (var t in tasks) { int old = t.AssignedToId; t.AssignedToId = available.Id; await _db.UpdateTaskAsync(t, old); }
-                    AddLog("AI", "Dengeleme tamamlandı."); await LoadDataSafe();
+                    sb.AppendLine($"{emp.FullName}: %{emp.WorkloadPercentage}");
                 }
-            }
-            else XtraMessageBox.Show("Sistem dengeli.");
+                return sb.ToString();
+            });
+
+            // Grafik 4: Aylık Tamamlanma Trendi
+            var chart4Panel = CreateChartPanel("Aylık Tamamlanma Trendi", () => {
+                if (_allTasksCache == null) return "";
+                var thisMonth = _allTasksCache.Count(t => t.CompletedDate.HasValue && 
+                    t.CompletedDate.Value.Month == DateTime.Now.Month);
+                var lastMonth = _allTasksCache.Count(t => t.CompletedDate.HasValue && 
+                    t.CompletedDate.Value.Month == DateTime.Now.AddMonths(-1).Month);
+                return $"Bu Ay: {thisMonth} görev\nGeçen Ay: {lastMonth} görev\nDeğişim: {(thisMonth > lastMonth ? "+" : "")}{thisMonth - lastMonth}";
+            });
+
+            mainLayout.Controls.Add(chart1Panel, 0, 0);
+            mainLayout.Controls.Add(chart2Panel, 1, 0);
+            mainLayout.Controls.Add(chart3Panel, 0, 1);
+            mainLayout.Controls.Add(chart4Panel, 1, 1);
+
+            chartsForm.Controls.Add(mainLayout);
+            chartsForm.ShowDialog(this);
+        }
+
+        private Panel CreateChartPanel(string title, Func<string> getData)
+        {
+            var panel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = clrSurface,
+                Margin = new Padding(5),
+                Padding = new Padding(15)
+            };
+
+            var titleLabel = new LabelControl
+            {
+                Text = title,
+                Dock = DockStyle.Top,
+                Height = 30,
+                Appearance = { Font = new Font("Segoe UI", 11, FontStyle.Bold), ForeColor = clrTextTitle }
+            };
+
+            var dataLabel = new LabelControl
+            {
+                Text = getData(),
+                Dock = DockStyle.Fill,
+                Appearance = { Font = new Font("Segoe UI", 10), ForeColor = clrTextBody, TextOptions = { VAlignment = VertAlignment.Top } },
+                AllowHtmlString = false
+            };
+
+            panel.Controls.Add(dataLabel);
+            panel.Controls.Add(titleLabel);
+
+            return panel;
         }
 
         private void FilterGridByCard(int cardIndex)

@@ -313,7 +313,7 @@ namespace OfisAsistan.Forms
         }
 
         // --- GİRİŞ MANTIĞI ---
-        private async void BtnLogin_Click(object sender, EventArgs e)
+        private void BtnLogin_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(txtUsername.Text))
             {

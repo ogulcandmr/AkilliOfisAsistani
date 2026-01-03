@@ -529,94 +529,93 @@ Lütfen her görevi detaylı analiz et ve tespit ettiğin anomalileri aşağıda
             return anomalies;
         }
 
-        // --- 6. AKILLI GÖREV BÖLÜCÜ (DETAYLI TASK BREAKDOWN) ---
-        public async Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
-        {
-            // Görev açıklaması boşsa erken dön
-            if (string.IsNullOrWhiteSpace(taskDescription))
-            {
-                System.Diagnostics.Debug.WriteLine("BreakDownTaskAsync: Görev açıklaması boş!");
-                return new List<SubTask>();
-            }
+        // --- 6. AKILLI GÖREV BÖLÜCÜ (DÜZELTİLMİŞ VERSİYON) ---
+public async Task<List<SubTask>> BreakDownTaskAsync(string taskDescription)
+{
+    // 1. Boş kontrolü
+    if (string.IsNullOrWhiteSpace(taskDescription))
+    {
+        System.Diagnostics.Debug.WriteLine("BreakDownTaskAsync: Görev açıklaması boş!");
+        return new List<SubTask>();
+    }
 
-            System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync çağrıldı: {taskDescription.Substring(0, Math.Min(100, taskDescription.Length))}...");
+    // 2. System Prompt - JSON Zorlaması (Kesin Emirler)
+    // AI'ın sohbet etmesini engelliyoruz.
+    string systemPrompt = @"Sen uzman bir Proje Yöneticisi ve İş Analistisin. 
+Görevin, verilen ana işi mantıklı, uygulanabilir ve ölçülebilir alt görevlere bölmek.
 
-            string systemPrompt = @"Sen deneyimli bir Proje Yöneticisi ve İş Analisti'sin. Verilen ana görevi mantıklı, yapılabilir ve ölçülebilir alt görevlere böl.
+KURALLAR:
+1. ÇIKTI SADECE GEÇERLİ JSON OLMALIDIR.
+2. Kesinlikle açıklama, sohbet cümlesi, markdown (```json gibi) EKLEME.
+3. Sadece '{' ile başlayıp '}' ile biten saf JSON nesnesini döndür.";
 
-Her alt görev için:
-- Spesifik ve net bir başlık
-- Detaylı açıklama (ne yapılacak, nasıl yapılacak)
-- Gerçekçi tahmini süre (saat cinsinden)
-- Öncelik sırası (hangi adım önce gelmeli)
-- Bağımlılıklar (hangi adımlar birbirine bağlı)
-
-Adımlar mantıklı bir sırayla, bağımlılıkları göz önünde bulundurarak düzenlenmeli.";
-
-            string userPrompt = $@"
+    // 3. User Prompt - Net Şablon
+    string userPrompt = $@"
 GÖREV TANIMI: {taskDescription}
+TARİH: {DateTime.Now:yyyy-MM-dd}
 
-BUGÜNÜN TARİHİ: {DateTime.Now:dd.MM.yyyy HH:mm}
+Lütfen bu görevi 3 ila 8 arasında detaylı alt adıma böl.
 
-Bu görevi 5-10 arası detaylı alt adıma ayır. Her adım için:
-- Başlık (kısa ve net)
-- Açıklama (ne yapılacak, nasıl yapılacak - 1-2 cümle)
-- Tahmini süre (saat)
-- Sıra numarası (hangi sırada yapılmalı)
-
-JSON Formatı:
+İSTENEN JSON FORMATI:
 {{
     ""steps"": [
         {{
-            ""Title"": ""Gereksinim analizi yap"",
-            ""Description"": ""Müşteri gereksinimlerini topla, analiz et ve dokümante et. Paydaşlarla görüşmeler yap."",
-            ""Hours"": 4,
+            ""Title"": ""Adım Başlığı"",
+            ""Description"": ""Ne yapılacağının detaylı açıklaması."",
+            ""Hours"": 2,
             ""Order"": 1
-        }},
-        {{
-            ""Title"": ""Teknik tasarım dokümantasyonu"",
-            ""Description"": ""Sistem mimarisi ve teknik tasarım dokümantasyonunu hazırla. Veritabanı şemasını çıkar."",
-            ""Hours"": 6,
-            ""Order"": 2
         }}
-    ],
-    ""totalEstimatedHours"": 10,
-    ""complexity"": ""Medium"",
-    ""recommendedApproach"": ""Bu görev için önerilen yaklaşım: Önce gereksinimleri netleştir, sonra teknik tasarım yap, ardından geliştirmeye başla.""
+    ]
 }}";
 
-            var response = await CallSingleShotWithTempAsync(systemPrompt, userPrompt, 0.7).ConfigureAwait(false); // Orta temperature
-            var resultList = new List<SubTask>();
+    try 
+    {
+        // 4. İsteği Gönder (Temperature 0.3 ile daha tutarlı yapı)
+        // DİKKAT: CallSingleShotWithTempAsync metodunun 3. parametresi temperature olmalı.
+        var response = await CallSingleShotWithTempAsync(systemPrompt, userPrompt, 0.3).ConfigureAwait(false);
 
-            if (!string.IsNullOrEmpty(response))
+        var resultList = new List<SubTask>();
+
+        if (!string.IsNullOrEmpty(response))
+        {
+            // 5. JSON Temizleme (Markdown vb. varsa siler - ExtractJson metodun olduğundan emin ol)
+            string cleanJson = ExtractJson(response); 
+
+            try
             {
-                try
+                var obj = JObject.Parse(cleanJson);
+                if (obj["steps"] != null)
                 {
-                    var obj = JObject.Parse(ExtractJson(response));
-                    if (obj["steps"] != null)
+                    foreach (var s in obj["steps"])
                     {
-                        foreach (var s in obj["steps"])
+                        resultList.Add(new SubTask
                         {
-                            resultList.Add(new SubTask
-                            {
-                                Title = (string)s["Title"] ?? "İsimsiz Adım",
-                                Description = (string)s["Description"] ?? "",
-                                EstimatedHours = s["Hours"]?.Value<int>() ?? 2,
-                                Order = s["Order"]?.Value<int>() ?? (resultList.Count + 1)
-                            });
-                        }
-
-                        // Sıraya göre sırala
-                        resultList = resultList.OrderBy(st => st.Order).ToList();
+                            Title = (string)s["Title"] ?? "İsimsiz Adım",
+                            Description = (string)s["Description"] ?? "",
+                            EstimatedHours = s["Hours"]?.Value<int>() ?? 2,
+                            Order = s["Order"]?.Value<int>() ?? (resultList.Count + 1)
+                        });
                     }
-                    System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync: {resultList.Count} alt görev oluşturuldu.");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync Parse Hatası: {ex.Message}");
+
+                    // Sıralama garantisi
+                    resultList = resultList.OrderBy(st => st.Order).ToList();
                 }
             }
-            return resultList;
+            catch (JsonReaderException jsonEx)
+            {
+                // JSON bozuk geldiyse logla ama patlatma
+                System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync JSON Hatası: {jsonEx.Message}");
+            }
         }
+
+        return resultList;
+    }
+    catch (Exception ex)
+    {
+        System.Diagnostics.Debug.WriteLine($"BreakDownTaskAsync Genel Hata: {ex.Message}");
+        return new List<SubTask>(); // Uygulamayı çökertme, boş liste dön
+    }
+}
 
         // Temperature parametreli özel metod
         private async Task<string> CallSingleShotWithTempAsync(string systemPrompt, string userPrompt, double temperature)
@@ -629,7 +628,7 @@ JSON Formatı:
             return await SendRequestToAIWithTempAsync(messages, temperature).ConfigureAwait(false);
         }
 
-        // Temperature destekli istek metodu
+       // Temperature destekli istek metodu (DÜZELTİLMİŞ)
         private async Task<string> SendRequestToAIWithTempAsync(object messages, double temperature)
         {
             int maxRetries = Constants.AI_MAX_RETRIES;
@@ -639,17 +638,44 @@ JSON Formatı:
             {
                 try
                 {
+                    // --- URL DÜZELTME BAŞLANGIÇ ---
                     string finalUrl = _baseApiUrl;
+                    
+                    // Eğer URL boşsa varsayılanı ata
+                    if (string.IsNullOrWhiteSpace(finalUrl)) 
+                        finalUrl = "https://api.groq.com/openai";
+
+                    // Hatalı markdown formatını kaldır ve sadece URL'i al
                     if (finalUrl.Contains("groq.com"))
-                        finalUrl = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)";
+                    {
+                        finalUrl = "https://api.groq.com/openai/v1/chat/completions";
+                    }
                     else if (!finalUrl.EndsWith("/chat/completions"))
-                        finalUrl += "/v1/chat/completions";
+                    {
+                        // Endpoint tamamlama
+                        if (finalUrl.EndsWith("/v1")) finalUrl += "/chat/completions";
+                        else finalUrl += "/v1/chat/completions";
+                    }
+
+                    // HTTP protokolü kontrolü
+                    if (!finalUrl.StartsWith("http"))
+                    {
+                        finalUrl = "https://" + finalUrl;
+                    }
+                    // --- URL DÜZELTME BİTİŞ ---
+
+                    // URL'in geçerli olup olmadığını test et
+                    if (!Uri.TryCreate(finalUrl, UriKind.Absolute, out Uri validUri))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"GEÇERSİZ URL: {finalUrl}");
+                        return null; 
+                    }
 
                     var requestBody = new
                     {
                         model = "llama-3.3-70b-versatile",
                         messages = messages,
-                        temperature = temperature, // Dinamik temperature
+                        temperature = temperature,
                         response_format = new { type = "json_object" }
                     };
 
@@ -659,12 +685,14 @@ JSON Formatı:
                     _httpClient.DefaultRequestHeaders.Clear();
                     _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
-                    var response = await _httpClient.PostAsync(finalUrl, content).ConfigureAwait(false);
+                    // Düzeltilmiş URI kullanılıyor
+                    var response = await _httpClient.PostAsync(validUri, content).ConfigureAwait(false);
 
                     if (!response.IsSuccessStatusCode)
                     {
                         string err = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                         System.Diagnostics.Debug.WriteLine($"AI API Hatası ({response.StatusCode}): {err}");
+                        
                         if ((int)response.StatusCode == 429 || (int)response.StatusCode >= 500)
                         {
                             await System.Threading.Tasks.Task.Delay(delay).ConfigureAwait(false);
@@ -689,7 +717,6 @@ JSON Formatı:
             }
             return null;
         }
-
         // --- 7. GÜNLÜK ÖZET (Smart Briefing) ---
         public async Task<string> GenerateDailyBriefingAsync(int employeeId)
         {

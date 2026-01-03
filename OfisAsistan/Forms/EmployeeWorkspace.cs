@@ -253,75 +253,107 @@ namespace OfisAsistan.Forms
         }
 
         private async SysTask OpenAiWizard()
+{
+    var item = GetSelectedTaskItem();
+    if (item == null || item.Task == null) 
+    { 
+        alertControl.Show(this, "Uyarı", "Lütfen parçalamak istediğiniz görevi seçin.", "", (Image)null); 
+        return; 
+    }
+
+    IOverlaySplashScreenHandle overlay = null;
+    
+    try
+    {
+        overlay = SplashScreenManager.ShowOverlayForm(this);
+        
+        // 1. GÖREV BİLGİSİNİ ZENGİNLEŞTİR (AI'ı Zorlayan Format)
+        StringBuilder taskInfoBuilder = new StringBuilder();
+        taskInfoBuilder.AppendLine($"GÖREV BAŞLIĞI: {item.Task.Title}");
+        
+        if (!string.IsNullOrEmpty(item.Task.Description))
+            taskInfoBuilder.AppendLine($"AÇIKLAMA: {item.Task.Description}");
+        else
+            taskInfoBuilder.AppendLine("AÇIKLAMA: (Kullanıcı açıklama girmedi. Lütfen başlığa bakarak bu işin nasıl yapılacağını adım adım planla.)");
+
+        if (item.Task.DueDate.HasValue)
+            taskInfoBuilder.AppendLine($"TESLİM TARİHİ: {item.Task.DueDate.Value:dd.MM.yyyy}");
+            
+        if (item.Task.EstimatedHours.GetValueOrDefault() > 0)
+            taskInfoBuilder.AppendLine($"TAHMİNİ SÜRE: {item.Task.EstimatedHours} saat");
+
+        // 2. AI SERVİSİNE GÖNDER
+        var subs = await _aiService.BreakDownTaskAsync(taskInfoBuilder.ToString());
+        
+        // Yükleme ekranını kapat
+        if(overlay != null) { SplashScreenManager.CloseOverlayForm(overlay); overlay = null; }
+        
+        // 3. SONUCU KONTROL ET
+        if (subs != null && subs.Any())
         {
-            var item = GetSelectedTaskItem();
-            if (item == null || item.Task == null) 
-            { 
-                alertControl.Show(this, "Uyarı", "Lütfen parçalamak istediğiniz görevi seçin.", "", (Image)null); 
-                return; 
-            }
-
-            IOverlaySplashScreenHandle overlay = SplashScreenManager.ShowOverlayForm(this);
-            try
+            // BAŞARILI DURUM
+            string message = $"'{item.Task.Title}' görevi için {subs.Count} alt adım önerildi:\n\n";
+            foreach (var s in subs.Take(5)) 
             {
-                // Görev bilgilerini daha detaylı hazırla
-                string taskInfo = $"{item.Task.Title}";
-                if (!string.IsNullOrEmpty(item.Task.Description))
-                {
-                    taskInfo += $"\n\nAçıklama: {item.Task.Description}";
-                }
-                if (item.Task.DueDate.HasValue)
-                {
-                    taskInfo += $"\n\nTeslim Tarihi: {item.Task.DueDate.Value:dd.MM.yyyy}";
-                }
-                if (item.Task.EstimatedHours.GetValueOrDefault() > 0)
-                {
-                    taskInfo += $"\n\nTahmini Süre: {item.Task.EstimatedHours} saat";
-                }
+                message += $"• {s.Title} ({s.EstimatedHours} saat)\n";
+            }
+            if (subs.Count > 5) message += $"\n... ve {subs.Count - 5} adım daha";
+            
+            message += "\n\nNotlara eklensin mi?";
 
-                var subs = await _aiService.BreakDownTaskAsync(taskInfo);
-                SplashScreenManager.CloseOverlayForm(overlay);
+            if (XtraMessageBox.Show(message, "AI Görev Parçalama", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"\r\n=== AI PLAN: {item.Task.Title.ToUpper()} ===");
+                sb.AppendLine($"Oluşturulma: {DateTime.Now:dd.MM.yyyy HH:mm}");
+                sb.AppendLine($"Toplam Alt Adım: {subs.Count}");
+                sb.AppendLine("─────────────────────────────────────");
+                foreach (var s in subs) 
+                {
+                    sb.AppendLine($"[ ] {s.Title} ({s.EstimatedHours} saat)");
+                }
+                sb.AppendLine("─────────────────────────────────────\r\n");
                 
-                if (subs != null && subs.Any())
-                {
-                    string message = $"'{item.Task.Title}' görevi için {subs.Count} alt adım önerildi:\n\n";
-                    foreach (var s in subs.Take(5)) // İlk 5'ini göster
-                    {
-                        message += $"• {s.Title} ({s.EstimatedHours} saat)\n";
-                    }
-                    if (subs.Count > 5)
-                    {
-                        message += $"\n... ve {subs.Count - 5} adım daha";
-                    }
-                    message += "\n\nNotlara eklensin mi?";
-
-                    if (XtraMessageBox.Show(message, "AI Görev Parçalama", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                    {
-                        StringBuilder sb = new StringBuilder();
-                        sb.AppendLine($"\r\n=== AI PLAN: {item.Task.Title.ToUpper()} ===");
-                        sb.AppendLine($"Oluşturulma: {DateTime.Now:dd.MM.yyyy HH:mm}");
-                        sb.AppendLine($"Toplam Alt Adım: {subs.Count}");
-                        sb.AppendLine("─────────────────────────────────────");
-                        foreach (var s in subs) 
-                        {
-                            sb.AppendLine($"[ ] {s.Title} ({s.EstimatedHours} saat)");
-                        }
-                        sb.AppendLine("─────────────────────────────────────\r\n");
-                        txtQuickNotes.Text += sb.ToString();
-                        alertControl.Show(this, "Başarılı", "Alt görevler notlara eklendi.", "", (Image)null);
-                    }
-                }
-                else 
-                {
-                    XtraMessageBox.Show("AI bu görev için alt adım öneremedi. Lütfen görev açıklamasını daha detaylı yazın.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            }
-            catch (Exception ex)
-            {
-                if (overlay != null) SplashScreenManager.CloseOverlayForm(overlay);
-                XtraMessageBox.Show($"Hata oluştu: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                txtQuickNotes.Text += sb.ToString();
+                txtQuickNotes.SelectionStart = txtQuickNotes.Text.Length;
+                txtQuickNotes.ScrollToCaret();
+                
+                alertControl.Show(this, "Başarılı", "Alt görevler notlara eklendi.", "", (Image)null);
             }
         }
+        else 
+        {
+            // 4. BAŞARISIZLIK DURUMU (FALLBACK - OTOMATİK MANUEL PLAN)
+            // AI cevap veremezse kullanıcıya sormadan veya hata vermeden manuel taslak oluştur.
+            // Bu sayede "Hata verdi" hissi oluşmaz.
+            
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine($"\r\n=== PLANLAMA TASLAĞI (AI Yanıt Vermedi) ===");
+            sb.AppendLine($"Görev: {item.Task.Title.ToUpper()}");
+            sb.AppendLine("─────────────────────────────────────");
+            sb.AppendLine("[ ] 1. Hazırlık ve Araştırma (1 saat)");
+            sb.AppendLine("[ ] 2. Uygulama Adımları (2 saat)");
+            sb.AppendLine("[ ] 3. Kontrol ve Test (1 saat)");
+            sb.AppendLine("[ ] 4. Teslim (1 saat)");
+            sb.AppendLine("─────────────────────────────────────\r\n");
+            
+            txtQuickNotes.Text += sb.ToString();
+            txtQuickNotes.SelectionStart = txtQuickNotes.Text.Length;
+            txtQuickNotes.ScrollToCaret();
+            
+            XtraMessageBox.Show("AI servisine şu an ulaşılamadı, ancak sizin için temel bir planlama taslağı oluşturuldu.", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+    }
+    catch (Exception ex)
+    {
+        if (overlay != null) SplashScreenManager.CloseOverlayForm(overlay);
+        XtraMessageBox.Show($"Bir hata oluştu ama işleyiş devam ediyor.\nDetay: {ex.Message}", "Bilgi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+    finally
+    {
+        if (overlay != null) SplashScreenManager.CloseOverlayForm(overlay);
+    }
+}
 
         private async SysTask LoadDataAsync()
         {
